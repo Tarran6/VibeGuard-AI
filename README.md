@@ -7,7 +7,7 @@
 **VibeGuard AI** — Neural Security Sentinel для opBNB Mainnet.  
 Реал-тайм блок-мониторинг + multi-LLM intent analysis (Gemini 2.0 + Grok 4).
 
-[![Contract Verified](https://img.shields.io/badge/Contract-Verified-green.svg)](https://opbnb.bscscan.com/address/0x427398aa19D86d7df10Fa13D9b75e94c8a1a511b)
+[![Contract Verified](https://img.shields.io/badge/Contract-Verified-green.svg)](https://opbnb.bscscan.com/address/0x6e5e4E9E9C4F5E498393c4b6216781a28e15902F)
 
 ---
 
