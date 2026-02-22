@@ -97,7 +97,7 @@ WEBAPP_URL = _raw_webapp if (_raw_webapp and _raw_webapp.startswith("https://"))
 
 LOGO_URL = _optional(
     "LOGO_URL",
-    "https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/logo.png"
+    "https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png"
 )
 
 OWNERS: set[int] = {PRIMARY_OWNER_ID}

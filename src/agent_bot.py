@@ -7,8 +7,8 @@ import os
 from web3 import Web3
 
 # Network: opBNB Mainnet
-# Verified Contract: 0x427398aa19D86d7df10Fa13D9b75e94c8a1a511b
-CONTRACT_ADDRESS = "0x427398aa19D86d7df10Fa13D9b75e94c8a1a511b"
+# Verified Contract (current): 0x6e5e4E9E9C4F5E498393c4b6216781a28e15902F
+CONTRACT_ADDRESS = "0x6e5e4E9E9C4F5E498393c4b6216781a28e15902F"
 RPC_URL = "https://opbnb-mainnet-rpc.bnbchain.org"
 
 logger = logging.getLogger("vibeguard.agent")

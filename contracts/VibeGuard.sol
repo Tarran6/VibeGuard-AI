@@ -4,8 +4,8 @@ pragma solidity ^0.8.19;
 /**
  * @title VibeGuard AI Sentinel
  * @dev Updated for BNB Chain Grant traction
- * Deployed on opBNB: 0x427398aa19D86d7df10Fa13D9b75e94c8a1a511b (old)
- * New version will be deployed soon
+ * Deployed on opBNB (current): 0x6e5e4E9E9C4F5E498393c4b6216781a28e15902F
+ * Legacy deployment: 0x427398aa19D86d7df10Fa13D9b75e94c8a1a511b
  */
 contract VibeGuard {
     address public owner;
