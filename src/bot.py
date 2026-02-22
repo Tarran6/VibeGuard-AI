@@ -26,6 +26,7 @@ import signal
 import time
 from asyncio import Lock, Queue, Semaphore
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import aiohttp
 import asyncpg
@@ -80,7 +81,7 @@ GOPLUS_APP_KEY    = _optional("GOPLUS_APP_KEY")
 GOPLUS_APP_SECRET = _optional("GOPLUS_APP_SECRET")
 
 # On-chain логирование (ТОЛЬКО для китов, не для подключённых кошельков)
-ENABLE_ONCHAIN    = _optional("ENABLE_ONCHAIN_LOG") == "true"
+ENABLE_ONCHAIN    = _optional("ENABLE_ONCHAIN_LOG").strip().lower() in {"true", "1", "yes", "y"}
 ONCHAIN_PRIVKEY   = _optional("WEB3_PRIVATE_KEY")
 ONCHAIN_CONTRACT  = _optional("VIBEGUARD_CONTRACT")
 
@@ -421,9 +422,23 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
     Вызывается ТОЛЬКО для китовых транзакций.
     Для подключённых кошельков НЕ вызывается.
     """
-    if not ENABLE_ONCHAIN or not ONCHAIN_PRIVKEY or not ONCHAIN_CONTRACT:
+    if not ENABLE_ONCHAIN:
         return
-    if not Web3.is_address(target) or not Web3.is_address(ONCHAIN_CONTRACT):
+
+    if not ONCHAIN_PRIVKEY:
+        logger.warning("On-chain log skipped: WEB3_PRIVATE_KEY is not set")
+        return
+
+    if not ONCHAIN_CONTRACT:
+        logger.warning("On-chain log skipped: VIBEGUARD_CONTRACT is not set")
+        return
+
+    if not Web3.is_address(target):
+        logger.warning("On-chain log skipped: invalid target address: %s", str(target)[:16])
+        return
+
+    if not Web3.is_address(ONCHAIN_CONTRACT):
+        logger.warning("On-chain log skipped: invalid VIBEGUARD_CONTRACT: %s", str(ONCHAIN_CONTRACT)[:16])
         return
 
     # Запускаем в отдельном потоке — синхронный Web3
@@ -446,14 +461,32 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
         })
         signed  = w3.eth.account.sign_transaction(tx, acct.key)
         tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-        return tx_hash.hex()
+        return tx_hash.hex(), acct.address
 
     try:
         loop    = asyncio.get_running_loop()
-        tx_hash = await loop.run_in_executor(None, _do_log)
-        logger.info(f"On-chain log OK: {tx_hash[:20]}...")
+        tx_hash, from_addr = await loop.run_in_executor(None, _do_log)
+        logger.info(
+            "On-chain log OK: %s... (from %s..., contract %s...)",
+            tx_hash[:20],
+            from_addr[:10],
+            str(ONCHAIN_CONTRACT)[:10],
+        )
     except Exception as e:
-        logger.warning(f"On-chain log failed: {str(e)[:100]}")
+        logger.warning(
+            "On-chain log failed: %s | fromKeySet=%s contract=%s rpc=%s",
+            str(e)[:160],
+            bool(ONCHAIN_PRIVKEY),
+            str(ONCHAIN_CONTRACT)[:16],
+            str(HTTP_URLS[0])[:40],
+        )
+
+
+def _build_webapp_url_with_nonce(base_url: str, nonce: str) -> str:
+    p = urlparse(base_url)
+    q = dict(parse_qsl(p.query, keep_blank_values=True))
+    q["nonce"] = nonce
+    return urlunparse(p._replace(query=urlencode(q)))
 
 
 # ---------------------------------------------------------------------------
@@ -1028,7 +1061,7 @@ async def cmd_connect(m: types.Message) -> None:
     await save_db()
 
     # Формируем URL с nonce как query-параметр
-    webapp_url_with_nonce = f"{WEBAPP_URL}?nonce={nonce}" if WEBAPP_URL else ""
+    webapp_url_with_nonce = _build_webapp_url_with_nonce(WEBAPP_URL, nonce) if WEBAPP_URL else ""
 
     kb = types.InlineKeyboardMarkup()
     if WEBAPP_URL:
