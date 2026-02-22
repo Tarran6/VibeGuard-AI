@@ -87,7 +87,12 @@ ONCHAIN_CONTRACT  = _optional("VIBEGUARD_CONTRACT")
 
 # URL веб-приложения (Telegram WebApp для Connect Wallet)
 # Обязательно https:// — иначе в Telegram будет ERR_UNKNOWN_URL_SCHEME
-_raw_webapp = _optional("WEBAPP_URL", "").strip().rstrip("/")
+_raw_webapp = _optional("WEBAPP_URL", "").strip()
+if (_raw_webapp.startswith('"') and _raw_webapp.endswith('"')) or (
+    _raw_webapp.startswith("'") and _raw_webapp.endswith("'")
+):
+    _raw_webapp = _raw_webapp[1:-1].strip()
+_raw_webapp = _raw_webapp.rstrip("/")
 if _raw_webapp and not _raw_webapp.startswith("https://"):
     logger.error(
         "⚠️ WEBAPP_URL должен начинаться с https://. "
