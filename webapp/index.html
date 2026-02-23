@@ -12,7 +12,6 @@
     import { createAppKit } from 'https://esm.sh/@reown/appkit';
     import { mainnet, bsc } from 'https://esm.sh/@reown/appkit/networks';
 
-    // Конфигурация opBNB
     const opBNB = {
       id: 204,
       name: 'opBNB',
@@ -22,7 +21,7 @@
     };
 
     const urlParams = new URLSearchParams(window.location.search);
-    const NONCE = urlParams.get('nonce') || urlParams.get('startapp') || 'test_session';
+    const NONCE = urlParams.get('nonce') || urlParams.get('startapp') || 'session_' + Math.floor(Math.random() * 1000);
     const tg = window.Telegram?.WebApp;
 
     if (tg) {
@@ -30,7 +29,6 @@
       tg.ready();
     }
 
-    // Инициализация Reown AppKit
     const modal = createAppKit({
       networks: [opBNB, bsc, mainnet],
       projectId: 'add9137cea1e48432cd4ba404f4a7443',
@@ -43,47 +41,49 @@
       themeMode: 'dark'
     });
 
-    // Глобальная функция для кнопки
     window.connectWallet = async () => {
       const status = document.getElementById('status');
       status.style.display = 'block';
+      status.textContent = 'Инициализация...';
       
       try {
-        // 1. Если уже законнекчены — сразу подписываем
-        if (modal.getIsConnected()) {
+        // ИСПРАВЛЕНИЕ: Используем правильный метод для проверки подключения
+        const account = modal.getAccount();
+        
+        if (account && account.isConnected) {
+          console.log("Уже подключен, переходим к подписи");
           await signVibeMessage();
           return;
         }
 
-        // 2. Иначе открываем окно выбора кошельков (как в Boinkers)
+        console.log("Открываем окно выбора кошельков...");
         status.textContent = 'Выберите кошелёк...';
         await modal.open();
 
-        // Слушаем успешное подключение
-        const unsubscribe = modal.subscribeEvents(async (event) => {
-          if (event.data.event === 'CONNECT_SUCCESS') {
-            unsubscribe();
+        // Подписка на успешное соединение
+        modal.subscribeAccount(async (state) => {
+          if (state.isConnected) {
             await signVibeMessage();
           }
         });
 
       } catch (err) {
         status.textContent = 'Ошибка: ' + err.message;
+        console.error(err);
       }
     };
 
-    // Функция подписи сообщения
     async function signVibeMessage() {
       const status = document.getElementById('status');
-      status.textContent = 'Подтвердите подпись в кошельке...';
+      status.textContent = 'Подтвердите подпись в приложении кошелька...';
 
       try {
         const provider = modal.getWalletProvider();
-        if (!provider) throw new Error('Провайдер не найден');
+        if (!provider) throw new Error('Провайдер не найден. Попробуйте выбрать кошелек снова.');
 
-        // Магический пинок для мобильных кошельков
+        // Редирект для мобилок
         if (/Android|iPhone|iPad/i.test(navigator.userAgent)) {
-          setTimeout(() => { window.location.href = "wc:"; }, 100);
+          setTimeout(() => { window.location.href = "wc:"; }, 200);
         }
 
         const ethersProvider = new ethers.BrowserProvider(provider);
@@ -93,69 +93,32 @@
         const message = `VibeGuard Auth\nNonce: ${NONCE}`;
         const signature = await signer.signMessage(message);
 
-        // Отправка данных в бота
         if (tg) {
           tg.sendData(JSON.stringify({
             address: address,
             signature: signature,
-            nonce: NONCE,
-            method: 'reown'
+            nonce: NONCE
           }));
           
           status.textContent = '✅ Верификация успешна!';
           setTimeout(() => tg.close(), 1000);
         }
       } catch (err) {
-        status.textContent = 'Ошибка подписи. Попробуйте еще раз.';
+        status.textContent = 'Ошибка подписи. Откройте кошелек и подтвердите запрос.';
         console.error(err);
       }
     }
   </script>
 
   <style>
-    body {
-      font-family: -apple-system, system-ui, sans-serif;
-      background: #0a0a0c;
-      color: white;
-      margin: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      overflow: hidden;
-    }
-    .container {
-      background: #121216;
-      border: 1px solid #26262c;
-      border-radius: 24px;
-      padding: 32px;
-      width: 90%;
-      max-width: 340px;
-      text-align: center;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-    }
+    body { font-family: -apple-system, system-ui, sans-serif; background: #0a0a0c; color: white; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+    .container { background: #121216; border: 1px solid #26262c; border-radius: 24px; padding: 32px; width: 90%; max-width: 340px; text-align: center; }
     .logo { font-size: 50px; margin-bottom: 10px; }
     h2 { margin: 10px 0; font-size: 24px; }
     p { color: #8e8e93; font-size: 14px; margin-bottom: 30px; }
-    .btn-main {
-      background: #6366f1;
-      color: white;
-      border: none;
-      border-radius: 16px;
-      padding: 18px;
-      width: 100%;
-      font-size: 16px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: transform 0.1s;
-    }
+    .btn-main { background: #6366f1; color: white; border: none; border-radius: 16px; padding: 18px; width: 100%; font-size: 16px; font-weight: 600; cursor: pointer; transition: transform 0.1s; }
     .btn-main:active { transform: scale(0.98); }
-    #status {
-      margin-top: 20px;
-      font-size: 13px;
-      color: #6366f1;
-      display: none;
-    }
+    #status { margin-top: 20px; font-size: 13px; color: #6366f1; display: none; }
   </style>
 </head>
 <body>
@@ -163,12 +126,8 @@
     <div class="logo">🛡️</div>
     <h2>VibeGuard</h2>
     <p>Подключите кошелёк для безопасного сканирования транзакций</p>
-    
-    <button class="btn-main" onclick="connectWallet()">
-      🚀 Подключить кошелёк
-    </button>
-
-    <div id="status">Инициализация...</div>
+    <button class="btn-main" onclick="connectWallet()">🚀 Подключить кошелёк</button>
+    <div id="status">Загрузка...</div>
   </div>
 </body>
 </html>
