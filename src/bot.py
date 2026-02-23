@@ -964,6 +964,13 @@ def get_main_menu_keyboard():
 @bot.message_handler(commands=["start"])
 async def cmd_start(m: types.Message) -> None:
     clear_state(m.from_user.id)
+    # Убираем reply-клавиатуру, если она была
+    await bot.send_message(
+        m.chat.id,
+        "🔄 Очищаем клавиатуру...",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+    # Отправляем основное меню
     await bot.send_message(
         m.chat.id,
         (
