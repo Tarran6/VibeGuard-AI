@@ -1079,82 +1079,6 @@ async def handle_webapp_data(m: types.Message) -> None:
         await safe_send(uid, f"❌ {esc(message)}")
 
 
-@bot.callback_query_handler(func=lambda c: c.data == "webapp_not_configured")
-async def cb_webapp_not_configured(c: types.CallbackQuery) -> None:
-    await bot.answer_callback_query(
-        c.id,
-        "WEBAPP_URL не задан в .env — см. README",
-        show_alert=True,
-    )
-
-
-@bot.message_handler(commands=["mywallets"])
-async def cmd_mywallets(m: types.Message) -> None:
-    uid = m.from_user.id
-    async with db_lock:
-        wallets = list(db["connected_wallets"].get(str(uid), []))
-
-    if not wallets:
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("🔗 Подключить кошелёк", callback_data="connect_new"))
-        await bot.reply_to(
-            m,
-            "👛 У тебя нет подключённых кошельков.\n"
-            "Нажми кнопку ниже чтобы подключить:",
-            reply_markup=kb
-        )
-        return
-
-    async with db_lock:
-        limit = db["cfg"]["limit_usd"]
-
-    lines = "\n".join(
-        f"{i+1}. <b>{esc(w['label'])}</b>\n   <code>{esc(w['address'])}</code>"
-        for i, w in enumerate(wallets)
-    )
-    
-    # Добавляем кнопки управления
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    for i, w in enumerate(wallets):
-        short = f"{w['address'][:6]}...{w['address'][-4:]}"
-        kb.add(types.InlineKeyboardButton(
-            f"❌ {w['label']} ({short})",
-            callback_data=f"dc:{uid}:{i}",
-        ))
-    
-    kb.add(types.InlineKeyboardButton("🔗 Добавить кошелёк", callback_data="connect_new"))
-    
-    await bot.reply_to(
-        m,
-        f"👛 <b>Твои кошельки ({len(wallets)}/5):</b>\n\n"
-        f"{lines}\n\n"
-        f"🔔 Алерты при любом движении.\n"
-        f"🐳 Глобальный лимит китов: <b>${limit:,.0f}</b>",
-        reply_markup=kb
-    )
-
-
-@bot.message_handler(commands=["disconnect"])
-async def cmd_disconnect(m: types.Message) -> None:
-    uid = m.from_user.id
-    async with db_lock:
-        wallets = list(db["connected_wallets"].get(str(uid), []))
-
-    if not wallets:
-        await bot.reply_to(m, "У тебя нет подключённых кошельков.")
-        return
-
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    for i, w in enumerate(wallets):
-        short = f"{w['address'][:6]}...{w['address'][-4:]}"
-        kb.add(types.InlineKeyboardButton(
-            f"❌ {w['label']} ({short})",
-            callback_data=f"dc:{uid}:{i}",
-        ))
-    kb.add(types.InlineKeyboardButton("Отмена", callback_data="dc:cancel"))
-    await bot.reply_to(m, "Выбери кошелёк для отключения:", reply_markup=kb)
-
-
 @bot.callback_query_handler(func=lambda c: c.data.startswith("dc:") or c.data == "connect_new")
 async def cb_wallet_action(c: types.CallbackQuery) -> None:
     # ОТЛАДКА
@@ -1245,6 +1169,82 @@ async def cb_wallet_action(c: types.CallbackQuery) -> None:
     
     fake_msg = FakeMessage(c.message.chat.id, c.from_user)
     await cmd_mywallets(fake_msg)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "webapp_not_configured")
+async def cb_webapp_not_configured(c: types.CallbackQuery) -> None:
+    await bot.answer_callback_query(
+        c.id,
+        "WEBAPP_URL не задан в .env — см. README",
+        show_alert=True,
+    )
+
+
+@bot.message_handler(commands=["mywallets"])
+async def cmd_mywallets(m: types.Message) -> None:
+    uid = m.from_user.id
+    async with db_lock:
+        wallets = list(db["connected_wallets"].get(str(uid), []))
+
+    if not wallets:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔗 Подключить кошелёк", callback_data="connect_new"))
+        await bot.reply_to(
+            m,
+            "👛 У тебя нет подключённых кошельков.\n"
+            "Нажми кнопку ниже чтобы подключить:",
+            reply_markup=kb
+        )
+        return
+
+    async with db_lock:
+        limit = db["cfg"]["limit_usd"]
+
+    lines = "\n".join(
+        f"{i+1}. <b>{esc(w['label'])}</b>\n   <code>{esc(w['address'])}</code>"
+        for i, w in enumerate(wallets)
+    )
+    
+    # Добавляем кнопки управления
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for i, w in enumerate(wallets):
+        short = f"{w['address'][:6]}...{w['address'][-4:]}"
+        kb.add(types.InlineKeyboardButton(
+            f"❌ {w['label']} ({short})",
+            callback_data=f"dc:{uid}:{i}",
+        ))
+    
+    kb.add(types.InlineKeyboardButton("🔗 Добавить кошелёк", callback_data="connect_new"))
+    
+    await bot.reply_to(
+        m,
+        f"👛 <b>Твои кошельки ({len(wallets)}/5):</b>\n\n"
+        f"{lines}\n\n"
+        f"🔔 Алерты при любом движении.\n"
+        f"🐳 Глобальный лимит китов: <b>${limit:,.0f}</b>",
+        reply_markup=kb
+    )
+
+
+@bot.message_handler(commands=["disconnect"])
+async def cmd_disconnect(m: types.Message) -> None:
+    uid = m.from_user.id
+    async with db_lock:
+        wallets = list(db["connected_wallets"].get(str(uid), []))
+
+    if not wallets:
+        await bot.reply_to(m, "У тебя нет подключённых кошельков.")
+        return
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for i, w in enumerate(wallets):
+        short = f"{w['address'][:6]}...{w['address'][-4:]}"
+        kb.add(types.InlineKeyboardButton(
+            f"❌ {w['label']} ({short})",
+            callback_data=f"dc:{uid}:{i}",
+        ))
+    kb.add(types.InlineKeyboardButton("Отмена", callback_data="dc:cancel"))
+    await bot.reply_to(m, "Выбери кошелёк для отключения:", reply_markup=kb)
 
 
 @bot.message_handler(commands=["check"])
