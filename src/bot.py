@@ -86,6 +86,7 @@ ONCHAIN_CONTRACT  = _optional("VIBEGUARD_CONTRACT")
 
 # URL веб-приложения (Telegram WebApp для Connect Wallet)
 WEBAPP_URL = _optional("WEBAPP_URL", "")
+REOWN_PROJECT_ID = _optional("REOWN_PROJECT_ID", "")
 
 LOGO_URL = _optional(
     "LOGO_URL",
@@ -1026,8 +1027,8 @@ async def cmd_connect(m: types.Message) -> None:
         }
     await save_db()
 
-    # Формируем URL с nonce как query-параметр
-    webapp_url_with_nonce = f"{WEBAPP_URL}?nonce={nonce}" if WEBAPP_URL else ""
+    # Формируем URL с nonce и project_id
+    webapp_url_with_nonce = f"{WEBAPP_URL}?nonce={nonce}&wc_project_id={REOWN_PROJECT_ID}" if WEBAPP_URL else ""
 
     kb = types.InlineKeyboardMarkup()
     if WEBAPP_URL:
@@ -1136,7 +1137,7 @@ async def cb_connect_new(c: types.CallbackQuery) -> None:
         }
     await save_db()
 
-    webapp_url_with_nonce = f"{WEBAPP_URL}?nonce={nonce}" if WEBAPP_URL else ""
+    webapp_url_with_nonce = f"{WEBAPP_URL}?nonce={nonce}&wc_project_id={REOWN_PROJECT_ID}" if WEBAPP_URL else ""
 
     kb = types.InlineKeyboardMarkup()
     if WEBAPP_URL:
