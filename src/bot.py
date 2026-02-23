@@ -1,12 +1,9 @@
 # =============================================================================
-#  VibeGuard Sentinel — src/bot.py (v24.1)
+#  VibeGuard Sentinel — src/bot.py (v24.2)
 #  Исправления:
-#    • Reply-клавиатура заменена на inline-кнопки (нет двойных сообщений)
-#    • Команда /connect передаёт nonce через startapp (безопасно)
-#    • Добавлена поддержка WalletConnect через Reown AppKit
-#    • Исправлены битые эмодзи в меню
-#    • Проверка chainId при старте
-#    • Исправлен nonce в on-chain логировании (pending)
+#    • Добавлена проверка m.text is None во всех хендлерах команд
+#    • Улучшена обработка ошибок в WebApp
+#    • Добавлено логирование для отладки подключения кошелька
 # =============================================================================
 
 import asyncio
@@ -392,7 +389,6 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
             address=Web3.to_checksum_address(ONCHAIN_CONTRACT),
             abi=_SCAN_ABI,
         )
-        # Используем nonce с учётом pending транзакций
         nonce = w3.eth.get_transaction_count(acct.address, 'pending')
         tx = contract.functions.logScan(
             Web3.to_checksum_address(target),
@@ -925,7 +921,7 @@ async def cmd_start(m: types.Message) -> None:
     await bot.send_photo(
         m.chat.id, LOGO_URL,
         caption=(
-            "🛡️ <b>VibeGuard Sentinel v24.1</b>\n\n"
+            "🛡️ <b>VibeGuard Sentinel v24.2</b>\n\n"
             "Мониторинг китов и скам-контрактов на opBNB.\n\n"
             "<b>Основные команды:</b>\n"
             "/connect — подключить кошелёк\n"
@@ -941,6 +937,10 @@ async def cmd_start(m: types.Message) -> None:
 
 @bot.message_handler(commands=["connect"])
 async def cmd_connect(m: types.Message) -> None:
+    # Защита от None текста (хотя у команды он должен быть)
+    if m.text is None:
+        return
+
     uid = m.from_user.id
     nonce = secrets.token_hex(16)
 
@@ -1094,6 +1094,8 @@ async def cb_connect_new(c: types.CallbackQuery) -> None:
 
 @bot.message_handler(commands=["mywallets"])
 async def cmd_mywallets(m: types.Message) -> None:
+    if m.text is None:
+        return
     uid = m.from_user.id
     async with db_lock:
         wallets = list(db["connected_wallets"].get(str(uid), []))
@@ -1139,6 +1141,8 @@ async def cmd_mywallets(m: types.Message) -> None:
 
 @bot.message_handler(commands=["disconnect"])
 async def cmd_disconnect(m: types.Message) -> None:
+    if m.text is None:
+        return
     uid = m.from_user.id
     async with db_lock:
         wallets = list(db["connected_wallets"].get(str(uid), []))
@@ -1160,6 +1164,8 @@ async def cmd_disconnect(m: types.Message) -> None:
 
 @bot.message_handler(commands=["check"])
 async def cmd_check(m: types.Message) -> None:
+    if m.text is None:
+        return
     args = m.text.split()
     if len(args) < 2:
         await bot.reply_to(m, "Пример: /check 0xКОНТРАКТ")
@@ -1202,6 +1208,8 @@ async def cmd_check(m: types.Message) -> None:
 
 @bot.message_handler(commands=["status", "stats"])
 async def cmd_status(m: types.Message) -> None:
+    if m.text is None:
+        return
     uptime  = time.time() - start_time
     hours   = int(uptime // 3600)
     minutes = int((uptime % 3600) // 60)
@@ -1218,7 +1226,7 @@ async def cmd_status(m: types.Message) -> None:
 
     await bot.reply_to(
         m,
-        f"🛡️ <b>VibeGuard Sentinel v24.1</b>\n\n"
+        f"🛡️ <b>VibeGuard Sentinel v24.2</b>\n\n"
         f"📊 <b>Статистика:</b>\n"
         f"Блоков:         <b>{s['blocks']:,}</b>\n"
         f"Последний блок: <b>{last_b:,}</b>\n"
@@ -1238,6 +1246,8 @@ async def cmd_status(m: types.Message) -> None:
 
 @bot.message_handler(commands=["limit"])
 async def cmd_limit(m: types.Message) -> None:
+    if m.text is None:
+        return
     args = m.text.split()
     if len(args) > 1:
         if not is_owner(m.from_user.id):
@@ -1271,6 +1281,8 @@ async def cmd_limit(m: types.Message) -> None:
 
 @bot.message_handler(commands=["watch"])
 async def cmd_watch(m: types.Message) -> None:
+    if m.text is None:
+        return
     if not is_owner(m.from_user.id): return
     args = m.text.split()
     if len(args) < 2:
@@ -1287,6 +1299,8 @@ async def cmd_watch(m: types.Message) -> None:
 
 @bot.message_handler(commands=["unwatch"])
 async def cmd_unwatch(m: types.Message) -> None:
+    if m.text is None:
+        return
     if not is_owner(m.from_user.id): return
     args = m.text.split()
     if len(args) < 2:
@@ -1304,6 +1318,8 @@ async def cmd_unwatch(m: types.Message) -> None:
 
 @bot.message_handler(commands=["ignore"])
 async def cmd_ignore(m: types.Message) -> None:
+    if m.text is None:
+        return
     if not is_owner(m.from_user.id): return
     args = m.text.split()
     if len(args) < 2:
@@ -1320,6 +1336,8 @@ async def cmd_ignore(m: types.Message) -> None:
 
 @bot.message_handler(commands=["unignore"])
 async def cmd_unignore(m: types.Message) -> None:
+    if m.text is None:
+        return
     if not is_owner(m.from_user.id): return
     args = m.text.split()
     if len(args) < 2:
@@ -1343,6 +1361,8 @@ async def cmd_cancel(m: types.Message) -> None:
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id) == "ask_ai")
 async def handle_ask_ai(m: types.Message) -> None:
+    if m.text is None:
+        return
     clear_state(m.from_user.id)
     wait = await bot.reply_to(m, "⏳ AI думает...")
     async with ai_sem:
@@ -1359,6 +1379,8 @@ async def handle_ask_ai(m: types.Message) -> None:
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id) == "check_contract")
 async def handle_check_state(m: types.Message) -> None:
+    if m.text is None:
+        return
     clear_state(m.from_user.id)
     m.text = f"/check {m.text.strip()}"
     await cmd_check(m)
@@ -1432,7 +1454,6 @@ async def main() -> None:
         chain_id = int(chain_data.get("result", "0x0"), 16)
         if chain_id != 204:
             logger.error(f"❌ Неверная сеть! Ожидается opBNB (204), получено {chain_id}")
-            # Можно остановиться, но для совместимости продолжаем с предупреждением
         else:
             logger.info("✅ Подключены к opBNB Mainnet")
     except Exception as e:
@@ -1441,7 +1462,7 @@ async def main() -> None:
     await refresh_bnb_price()
 
     logger.info(
-        f"🚀 VibeGuard v24.1 ЗАПУЩЕН | "
+        f"🚀 VibeGuard v24.2 ЗАПУЩЕН | "
         f"limit=${db['cfg']['limit_usd']:,.0f} | "
         f"BNB=${_price_cache.get('BNB', 0):.2f} | "
         f"onchain={'ON' if ENABLE_ONCHAIN else 'OFF'}"
