@@ -1039,21 +1039,24 @@ async def handle_webapp_data(m: types.Message) -> None:
         data = json.loads(m.web_app_data.data)
         address = data.get("address", "").strip()
         sig = data.get("signature", "").strip()
-        # Извлекаем nonce из данных WebApp
-        nonce_from_app = data.get("nonce", "").strip() 
+        # Вытаскиваем nonce, чтобы верификация прошла успешно
+        nonce_val = data.get("nonce", "").strip()
         
-        logger.info(f"📩 WebApp Data от {uid}: {address[:10]}...")
+        logger.info(f"📩 Данные WebApp от {uid}: addr={address[:8]}, nonce={nonce_val[:8]}")
     except Exception as e:
-        await safe_send(uid, "❌ Ошибка парсинга данных.")
+        logger.error(f"Ошибка парсинга JSON от {uid}: {e}")
+        await safe_send(uid, "❌ Ошибка обработки данных.")
         return
 
-    # Вызываем верификацию
+    # Запускаем верификацию
     success, message = await verify_wallet(uid, address, sig)
 
     if success:
         await safe_send(uid, f"✅ <b>Кошелёк подключён!</b>\n<code>{esc(address.lower())}</code>")
-        await save_db() # Принудительно сохраняем
+        # Принудительно сохраняем БД после успеха
+        await save_db() 
     else:
+        logger.warning(f"Ошибка верификации для {uid}: {message}")
         await safe_send(uid, f"❌ {esc(message)}")
 
 
