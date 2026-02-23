@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 #  VibeGuard Sentinel — src/bot.py
 #  Version: 24.0
 #  Python: 3.11+
@@ -955,9 +955,10 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
 
 def kb_main() -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    kb.add("📊 Status", "🧠 Ask AI")
-    kb.add("👛 My Wallets", "🔍 Check Contract")
-    kb.add("🛡️ Support")
+    kb.add("� Мои кошельки", "🔗 Подключить кошелёк")
+    kb.add("📊 Статистика", "🧠 AI Ассистент")
+    kb.add("� Проверить контракт", "⚙️ Настройки")
+    kb.add("🛡️ Поддержка")
     return kb
 
 
@@ -1094,10 +1095,13 @@ async def cmd_mywallets(m: types.Message) -> None:
         wallets = list(db["connected_wallets"].get(str(uid), []))
 
     if not wallets:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔗 Подключить кошелёк", callback_data="connect_new"))
         await bot.reply_to(
             m,
             "👛 У тебя нет подключённых кошельков.\n"
-            "/connect — подключить.",
+            "Нажми кнопку ниже чтобы подключить:",
+            reply_markup=kb
         )
         return
 
@@ -1108,12 +1112,25 @@ async def cmd_mywallets(m: types.Message) -> None:
         f"{i+1}. <b>{esc(w['label'])}</b>\n   <code>{esc(w['address'])}</code>"
         for i, w in enumerate(wallets)
     )
+    
+    # Добавляем кнопки управления
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for i, w in enumerate(wallets):
+        short = f"{w['address'][:6]}...{w['address'][-4:]}"
+        kb.add(types.InlineKeyboardButton(
+            f"❌ {w['label']} ({short})",
+            callback_data=f"dc:{uid}:{i}",
+        ))
+    
+    kb.add(types.InlineKeyboardButton("🔗 Добавить кошелёк", callback_data="connect_new"))
+    
     await bot.reply_to(
         m,
         f"👛 <b>Твои кошельки ({len(wallets)}/5):</b>\n\n"
         f"{lines}\n\n"
         f"🔔 Алерты при любом движении.\n"
         f"🐳 Глобальный лимит китов: <b>${limit:,.0f}</b>",
+        reply_markup=kb
     )
 
 
