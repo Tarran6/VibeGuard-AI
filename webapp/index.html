@@ -2,8 +2,9 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>VibeGuard Auth</title>
+  
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
 
@@ -11,111 +12,163 @@
     import { createAppKit } from 'https://esm.sh/@reown/appkit';
     import { mainnet, bsc } from 'https://esm.sh/@reown/appkit/networks';
 
+    // Конфигурация opBNB
     const opBNB = {
       id: 204,
-      name: 'opBNB Mainnet',
+      name: 'opBNB',
       nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
       rpcUrls: { default: { http: ['https://opbnb-rpc.publicnode.com'] } },
       blockExplorers: { default: { name: 'opBNBScan', url: 'https://opbnbscan.com' } }
     };
 
     const urlParams = new URLSearchParams(window.location.search);
-    const NONCE = urlParams.get('startapp') || urlParams.get('nonce') || '';
-    
-    // ВСТАВЬ СЮДА СВОЙ ID ИЗ DASHBOARD REOWN НАВСЕГДА
-    const MY_PROJECT_ID = 'add9137cea1e48432cd4ba404f4a7443'; 
-
+    const NONCE = urlParams.get('nonce') || urlParams.get('startapp') || 'test_session';
     const tg = window.Telegram?.WebApp;
 
-    if (!tg || !tg.sendData) {
-      document.body.innerHTML = '<div class="card"><h2>🛡️ VibeGuard</h2><p class="muted">Откройте через @VibeGuard_AI_bot</p></div>';
-    } else {
+    if (tg) {
       tg.expand();
       tg.ready();
     }
 
-    // Инициализация модалки
+    // Инициализация Reown AppKit
     const modal = createAppKit({
       networks: [opBNB, bsc, mainnet],
-      projectId: MY_PROJECT_ID,
+      projectId: 'add9137cea1e48432cd4ba404f4a7443',
       metadata: {
         name: 'VibeGuard AI',
-        description: 'Безопасная Web3 авторизация',
-        url: window.location.origin,
+        description: 'Crypto Security Analysis',
+        url: 'https://vibe-guard-ai.vercel.app',
         icons: ['https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png']
       },
       themeMode: 'dark'
     });
 
+    // Глобальная функция для кнопки
     window.connectWallet = async () => {
       const status = document.getElementById('status');
       status.style.display = 'block';
       
       try {
-        // Если кошелек уже подключен, сначала предложим подписать
-        if (modal.getIsConnectedState()) {
-            await proceedToSign();
-            return;
+        // 1. Если уже законнекчены — сразу подписываем
+        if (modal.getIsConnected()) {
+          await signVibeMessage();
+          return;
         }
 
+        // 2. Иначе открываем окно выбора кошельков (как в Boinkers)
+        status.textContent = 'Выберите кошелёк...';
         await modal.open();
 
-        // Ждем успешного коннекта
-        modal.subscribeEvents(async (event) => {
+        // Слушаем успешное подключение
+        const unsubscribe = modal.subscribeEvents(async (event) => {
           if (event.data.event === 'CONNECT_SUCCESS') {
-            await proceedToSign();
+            unsubscribe();
+            await signVibeMessage();
           }
         });
-      } catch (e) {
-        alert('Ошибка: ' + e.message);
+
+      } catch (err) {
+        status.textContent = 'Ошибка: ' + err.message;
       }
     };
 
-    async function proceedToSign() {
+    // Функция подписи сообщения
+    async function signVibeMessage() {
       const status = document.getElementById('status');
-      status.textContent = 'Подписываем сообщение в кошельке...';
-      
+      status.textContent = 'Подтвердите подпись в кошельке...';
+
       try {
-        const address = modal.getAddress();
         const provider = modal.getWalletProvider();
-        
-        if (!provider) throw new Error('Кошелек не предоставил провайдер. Попробуйте еще раз.');
+        if (!provider) throw new Error('Провайдер не найден');
+
+        // Магический пинок для мобильных кошельков
+        if (/Android|iPhone|iPad/i.test(navigator.userAgent)) {
+          setTimeout(() => { window.location.href = "wc:"; }, 100);
+        }
 
         const ethersProvider = new ethers.BrowserProvider(provider);
         const signer = await ethersProvider.getSigner();
+        const address = await signer.getAddress();
         
-        // Важно: Boinkers и другие используют четкие сообщения
-        const signature = await signer.signMessage(`VibeGuard verification: ${NONCE}`);
+        const message = `VibeGuard Auth\nNonce: ${NONCE}`;
+        const signature = await signer.signMessage(message);
 
-        tg.sendData(JSON.stringify({
-          address: address,
-          signature: signature,
-          nonce: NONCE
-        }));
-
-        status.textContent = '✅ Готово! Возвращаемся в бота...';
-        setTimeout(() => tg.close(), 1200);
-      } catch (e) {
-        alert('Ошибка подписи: ' + e.message);
-        status.style.display = 'none';
+        // Отправка данных в бота
+        if (tg) {
+          tg.sendData(JSON.stringify({
+            address: address,
+            signature: signature,
+            nonce: NONCE,
+            method: 'reown'
+          }));
+          
+          status.textContent = '✅ Верификация успешна!';
+          setTimeout(() => tg.close(), 1000);
+        }
+      } catch (err) {
+        status.textContent = 'Ошибка подписи. Попробуйте еще раз.';
+        console.error(err);
       }
     }
   </script>
 
   <style>
-    /* Твои стили отличные, оставляем как есть */
-    body { font-family: sans-serif; background: #0f0f1f; color: #e0e0ff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-    .card { background: #16162a; border-radius: 28px; padding: 40px; width: 100%; max-width: 360px; text-align: center; border: 1px solid #4a4a6a; }
-    .btn-connect { width: 100%; padding: 20px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; border: none; border-radius: 20px; font-weight: 700; cursor: pointer; }
-    #status { display: none; margin-top: 20px; color: #67e8f9; }
+    body {
+      font-family: -apple-system, system-ui, sans-serif;
+      background: #0a0a0c;
+      color: white;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .container {
+      background: #121216;
+      border: 1px solid #26262c;
+      border-radius: 24px;
+      padding: 32px;
+      width: 90%;
+      max-width: 340px;
+      text-align: center;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+    }
+    .logo { font-size: 50px; margin-bottom: 10px; }
+    h2 { margin: 10px 0; font-size: 24px; }
+    p { color: #8e8e93; font-size: 14px; margin-bottom: 30px; }
+    .btn-main {
+      background: #6366f1;
+      color: white;
+      border: none;
+      border-radius: 16px;
+      padding: 18px;
+      width: 100%;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    .btn-main:active { transform: scale(0.98); }
+    #status {
+      margin-top: 20px;
+      font-size: 13px;
+      color: #6366f1;
+      display: none;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h2>🛡️ VibeGuard</h2>
-    <p style="color: #a0a0cc; margin-bottom: 30px;">Подключи кошелек для верификации аккаунта</p>
-    <button class="btn-connect" onclick="connectWallet()">🚀 Подключить кошелёк</button>
-    <div id="status">Запуск...</div>
+  <div class="container">
+    <div class="logo">🛡️</div>
+    <h2>VibeGuard</h2>
+    <p>Подключите кошелёк для безопасного сканирования транзакций</p>
+    
+    <button class="btn-main" onclick="connectWallet()">
+      🚀 Подключить кошелёк
+    </button>
+
+    <div id="status">Инициализация...</div>
   </div>
 </body>
 </html>
