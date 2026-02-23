@@ -1,9 +1,8 @@
 # =============================================================================
-#  VibeGuard Sentinel — src/bot.py (v24.4 Fixed)
+#  VibeGuard Sentinel — src/bot.py (v24.4 FULL OPTIMIZED)
 #  Исправления:
-#    • Объединен обработчик web_app_data для исключения конфликтов.
-#    • Добавлена корректная обработка nonce для верификации подписи.
-#    • Добавлено принудительное сохранение базы данных после привязки.
+#    • Индекс O(1) для мгновенного поиска WebApp сессий
+#    • Сохранена вся оригинальная логика AI и мониторинга
 # =============================================================================
 
 import asyncio
@@ -103,7 +102,7 @@ if not WEBAPP_URL:
     logger.warning("⚠️  WEBAPP_URL не задан — кнопка Connect Wallet будет недоступна")
 
 # ---------------------------------------------------------------------------
-# СТРУКТУРА БД
+# СТРУКТУРА БД И ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
 # ---------------------------------------------------------------------------
 
 _DB_DEFAULT: dict = {
@@ -115,12 +114,9 @@ _DB_DEFAULT: dict = {
 }
 
 db: dict = {}
-# ОПТИМИЗАЦИЯ: Быстрый поиск юзера по nonce за O(1)
-_pending_by_nonce: dict[str, int] = {}
 
-# ---------------------------------------------------------------------------
-# ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
-# ---------------------------------------------------------------------------
+# ОПТИМИЗАЦИЯ 1: Быстрый поиск юзера по nonce за O(1)
+_pending_by_nonce: dict[str, int] = {}
 
 pool: Optional[asyncpg.Pool] = None
 http_session: Optional[aiohttp.ClientSession] = None
@@ -158,7 +154,6 @@ STATE_TTL = 600
 def esc(text: str) -> str:
     return html.escape(str(text))
 
-
 def get_state(uid: int) -> Optional[str]:
     e = _user_states.get(uid)
     if not e:
@@ -168,18 +163,14 @@ def get_state(uid: int) -> Optional[str]:
         return None
     return e["state"]
 
-
 def set_state(uid: int, state: str) -> None:
     _user_states[uid] = {"state": state, "ts": time.time()}
-
 
 def clear_state(uid: int) -> None:
     _user_states.pop(uid, None)
 
-
 def is_owner(uid: int) -> bool:
     return uid in OWNERS
-
 
 # ---------------------------------------------------------------------------
 # POSTGRESQL
@@ -205,7 +196,7 @@ async def init_db() -> None:
             db.setdefault("connected_wallets", {})
             db.setdefault("pending_verifications", {})
             
-            # НАПОЛНЕНИЕ ИНДЕКСА ПРИ СТАРТЕ
+            # ОПТИМИЗАЦИЯ 2: НАПОЛНЕНИЕ ИНДЕКСА ПРИ СТАРТЕ
             for uid_str, p in db["pending_verifications"].items():
                 if time.time() - p.get("ts", 0) < STATE_TTL:
                     _pending_by_nonce[p["nonce"]] = int(uid_str)
@@ -219,7 +210,6 @@ async def init_db() -> None:
                 json.dumps(db),
             )
             logger.info("🆕 Создана новая БД")
-
 
 async def save_db() -> None:
     if not pool:
@@ -239,9 +229,8 @@ async def save_db() -> None:
                 await asyncio.sleep(2 ** attempt)
     logger.error("❌ save_db: все 3 попытки провалились")
 
-
 # ---------------------------------------------------------------------------
-# ЦЕНЫ
+# ЦЕНЫ И RPC
 # ---------------------------------------------------------------------------
 
 async def _fetch_bnb_price() -> float:
@@ -259,7 +248,6 @@ async def _fetch_bnb_price() -> float:
         logger.warning(f"BNB price fetch error: {e}")
     return 600.0  # fallback
 
-
 async def _fetch_token_price(token_addr: str) -> float:
     try:
         timeout = aiohttp.ClientTimeout(total=8)
@@ -276,7 +264,6 @@ async def _fetch_token_price(token_addr: str) -> float:
         logger.warning(f"Token price fetch error {token_addr[:10]}: {e}")
     return 0.0
 
-
 async def refresh_bnb_price() -> None:
     global _price_cache_ts
     async with price_lock:
@@ -287,11 +274,9 @@ async def refresh_bnb_price() -> None:
         _price_cache_ts = time.time()
         logger.info(f"💰 BNB = ${price:.2f}")
 
-
 async def bnb_to_usd(bnb: float) -> float:
     await refresh_bnb_price()
     return bnb * _price_cache.get("BNB", 600.0)
-
 
 async def token_to_usd(token_addr: str, raw: int, decimals: int) -> float:
     amount = raw / (10 ** decimals)
@@ -302,11 +287,6 @@ async def token_to_usd(token_addr: str, raw: int, decimals: int) -> float:
         _token_price_cache[token_addr] = (price, now)
         cached = (price, now)
     return amount * cached[0]
-
-
-# ---------------------------------------------------------------------------
-# RPC
-# ---------------------------------------------------------------------------
 
 async def rpc(payload: dict) -> dict:
     timeout = aiohttp.ClientTimeout(total=12)
@@ -327,7 +307,6 @@ async def rpc(payload: dict) -> dict:
             raise RuntimeError("RPC 429")
         raise RuntimeError(f"Все RPC узлы недоступны. Последняя ошибка: {last_error}")
 
-
 async def get_block(number: int) -> Optional[dict]:
     try:
         data = await rpc({
@@ -338,7 +317,6 @@ async def get_block(number: int) -> Optional[dict]:
     except Exception as e:
         logger.warning(f"get_block {number}: {e}")
         return None
-
 
 async def get_logs(from_bn: int, to_bn: int) -> list[dict]:
     try:
@@ -356,7 +334,6 @@ async def get_logs(from_bn: int, to_bn: int) -> list[dict]:
         logger.warning(f"get_logs {from_bn}-{to_bn}: {e}")
         return []
 
-
 async def get_decimals(token_addr: str) -> int:
     if token_addr in _decimals_cache:
         return _decimals_cache[token_addr]
@@ -373,9 +350,8 @@ async def get_decimals(token_addr: str) -> int:
     _decimals_cache[token_addr] = dec
     return dec
 
-
 # ---------------------------------------------------------------------------
-# ON-CHAIN ЛОГИРОВАНИЕ (только для китов)
+# ON-CHAIN ЛОГИРОВАНИЕ & AI & SCAM CHECK
 # ---------------------------------------------------------------------------
 
 _SCAN_ABI = [{
@@ -426,10 +402,6 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
         logger.warning(f"On-chain log failed: {str(e)[:100]}")
 
 
-# ---------------------------------------------------------------------------
-# AI
-# ---------------------------------------------------------------------------
-
 async def call_ai(prompt: str) -> str:
     configs = (
         [("xai",    k) for k in XAI_KEYS]  +
@@ -449,7 +421,6 @@ async def call_ai(prompt: str) -> str:
                 logger.warning(f"AI [{provider}] error: {e}")
 
     return "Все AI-провайдеры временно недоступны."
-
 
 async def _ai_request(provider: str, key: str, prompt: str) -> Optional[str]:
     timeout = aiohttp.ClientTimeout(total=20)
@@ -496,11 +467,6 @@ async def _ai_request(provider: str, key: str, prompt: str) -> Optional[str]:
         raise RuntimeError("Gemini: неверный формат ответа")
     return data.get("choices", [{}])[0].get("message", {}).get("content") or ""
 
-
-# ---------------------------------------------------------------------------
-# СКАМ-ПРОВЕРКА
-# ---------------------------------------------------------------------------
-
 async def check_scam(addr: str) -> list[str]:
     if not Web3.is_address(addr):
         return []
@@ -529,7 +495,6 @@ async def check_scam(addr: str) -> list[str]:
         logger.warning(f"GoPlus error {addr[:10]}: {e}")
         return []
 
-
 # ---------------------------------------------------------------------------
 # TELEGRAM УТИЛИТЫ
 # ---------------------------------------------------------------------------
@@ -541,13 +506,11 @@ async def safe_send(chat_id: int, text: str, **kwargs) -> None:
         except Exception as e:
             logger.warning(f"safe_send → {chat_id}: {e}")
 
-
 async def notify_owners(text: str) -> None:
     await asyncio.gather(
         *[safe_send(uid, text) for uid in OWNERS],
         return_exceptions=True,
     )
-
 
 def _wallet_watchers(address: str) -> list[int]:
     addr = address.lower()
@@ -557,16 +520,13 @@ def _wallet_watchers(address: str) -> list[int]:
             result.append(int(uid_str))
     return result
 
-
 def _is_connected_wallet(address: str) -> bool:
     addr = address.lower()
     for wallets in db.get("connected_wallets", {}).values():
         if any(w["address"].lower() == addr for w in wallets):
             return True
     return False
-
-
-# ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
 # ОБРАБОТКА BNB-ТРАНЗАКЦИЙ
 # ---------------------------------------------------------------------------
 
@@ -831,9 +791,9 @@ async def monitor() -> None:
                     else:
                         await log_queue.put(log)
 
-            async with db_lock:
-                db["stats"]["blocks"] += to_proc
-                db["last_block"]       = end_bn
+                async with db_lock:
+                    db["stats"]["blocks"] += to_proc
+                    db["last_block"]       = end_bn
 
             save_counter += to_proc
             if save_counter >= SAVE_EVERY:
@@ -981,13 +941,11 @@ def get_main_menu_keyboard():
 @bot.message_handler(commands=["start"])
 async def cmd_start(m: types.Message) -> None:
     clear_state(m.from_user.id)
-    # Убираем reply-клавиатуру, если она была
     await bot.send_message(
         m.chat.id,
         "🔄 Очищаем клавиатуру...",
         reply_markup=types.ReplyKeyboardRemove()
     )
-    # Отправляем основное меню
     await bot.send_message(
         m.chat.id,
         (
@@ -1011,9 +969,10 @@ async def cmd_connect(m: types.Message) -> None:
             "ts": time.time(),
         }
     await save_db()
+    
+    # ОПТИМИЗАЦИЯ O(1): РЕГИСТРИРУЕМ В БЫСТРОМ ИНДЕКСЕ
     _pending_by_nonce[nonce] = uid
 
-    # Формируем URL с параметрами startapp и wc_project_id
     parts = [f"startapp={nonce}", f"wc_project_id={REOWN_PROJECT_ID}"]
     if BOT_PUBLIC_URL:
         parts.append(f"api={BOT_PUBLIC_URL}/webapp/connect")
@@ -1047,13 +1006,11 @@ async def handle_webapp_data(m: types.Message) -> None:
     logger.info(f"📩 Получены web_app_data от пользователя {uid}")
     
     try:
-        # Парсим JSON из WebApp
         raw_data = m.web_app_data.data
         data = json.loads(raw_data)
         
         address = data.get("address", "").strip()
         sig = data.get("signature", "").strip()
-        # Этот nonce критически важен для связи сессии!
         nonce_from_app = data.get("nonce", "").strip() 
         
         logger.info(f"📦 Данные: address={address[:10]}..., nonce={nonce_from_app[:8]}...")
@@ -1067,7 +1024,6 @@ async def handle_webapp_data(m: types.Message) -> None:
         await safe_send(uid, "❌ Неполные данные от WebApp.")
         return
 
-    # Запускаем верификацию (она проверит подпись и nonce)
     success, message = await verify_wallet(uid, address, sig)
 
     if success:
@@ -1078,7 +1034,6 @@ async def handle_webapp_data(m: types.Message) -> None:
             f"<code>{esc(address.lower())}</code>\n\n"
             f"Теперь ты получаешь личные алерты о всех транзакциях этого адреса.",
         )
-        # Принудительно сохраняем БД, чтобы кошелек не пропал после рестарта
         await save_db()
     else:
         logger.warning(f"❌ Ошибка верификации для {uid}: {message}")
@@ -1106,10 +1061,8 @@ async def handle_menu_callback(c: types.CallbackQuery):
 
     if action == "mywallets":
         await bot.answer_callback_query(c.id)
-        # Показываем список кошельков новым сообщением
         await cmd_mywallets(message)
     elif action == "connect":
-        # Генерируем nonce и редактируем текущее сообщение
         await bot.answer_callback_query(c.id)
         nonce = secrets.token_hex(16)
         async with db_lock:
@@ -1118,6 +1071,10 @@ async def handle_menu_callback(c: types.CallbackQuery):
                 "ts": time.time(),
             }
         await save_db()
+        
+        # ОПТИМИЗАЦИЯ O(1): РЕГИСТРИРУЕМ В БЫСТРОМ ИНДЕКСЕ
+        _pending_by_nonce[nonce] = user_id
+        
         parts = [f"startapp={nonce}", f"wc_project_id={REOWN_PROJECT_ID}"]
         if BOT_PUBLIC_URL:
             parts.append(f"api={BOT_PUBLIC_URL}/webapp/connect")
@@ -1522,45 +1479,6 @@ async def _run_health_server() -> None:
         if not nonce or not address or not signature:
             return web.json_response({"ok": False, "error": "missing fields"}, status=400, headers=cors_headers)
 
-        uid: Optional[int] = None
-        async with db_lock:
-            for uid_str, p in db.get("pending_verifications", {}).items():
-                if str(p.get("nonce", "")) == nonce:
-                    try:
-                        uid = int(uid_str)
-                    except Exception:
-                        uid = None
-                    break
-
-        if uid is None:
-            return web.json_response({"ok": False, "error": "session not found"}, status=404, headers=cors_headers)
-
-        success, message = await verify_wallet(uid, address, signature)
-        if success:
-            await safe_send(
-                uid,
-                f"✅ <b>Кошелёк подключён!</b>\n"
-                f"<code>{esc(address.lower())}</code>\n\n"
-                f"Теперь ты получаешь личные алерты о всех транзакциях "
-                f"этого адреса.",
-            )
-            return web.json_response({"ok": True}, headers=cors_headers)
-
-        return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
-
-   async def handle_webapp_connect(request):
-        try:
-            payload = await request.json()
-        except Exception:
-            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
-
-        nonce = str(payload.get("nonce", "")).strip()
-        address = str(payload.get("address", "")).strip()
-        signature = str(payload.get("signature", "")).strip()
-
-        if not nonce or not address or not signature:
-            return web.json_response({"ok": False, "error": "missing fields"}, status=400, headers=cors_headers)
-
         # ОПТИМИЗАЦИЯ O(1): Ищем юзера мгновенно по nonce из нашего словаря
         uid = _pending_by_nonce.get(nonce)
 
@@ -1581,6 +1499,27 @@ async def _run_health_server() -> None:
             return web.json_response({"ok": True}, headers=cors_headers)
 
         return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
+
+    async def handle_webapp_connect_options(_):
+        return web.Response(status=204, headers=cors_headers)
+
+    app = web.Application()
+    app.router.add_get("/", handle)
+    app.router.add_options("/webapp/connect", handle_webapp_connect_options)
+    app.router.add_post("/webapp/connect", handle_webapp_connect)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+    logger.info("✅ Health server listening on 0.0.0.0:%d", port)
+
+    try:
+        while not _shutdown:
+            await asyncio.sleep(1)
+    finally:
+        await runner.cleanup()
+        logger.info("✅ Health server stopped")
+
 
 # ---------------------------------------------------------------------------
 # MAIN
