@@ -26,11 +26,9 @@ import signal
 import time
 from asyncio import Lock, Queue, Semaphore
 from typing import Optional
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import aiohttp
 import asyncpg
-from aiohttp import web
 from dotenv import load_dotenv
 from eth_account.messages import encode_defunct
 from telebot import types
@@ -67,8 +65,6 @@ TELEGRAM_TOKEN   = _require("TELEGRAM_TOKEN")
 DATABASE_URL     = _require("DATABASE_URL")
 PRIMARY_OWNER_ID = int(_require("PRIMARY_OWNER_ID"))
 
-BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "").strip().rstrip("/")
-
 # Парсинг пула RPC ссылок (Архитектура "Гидра")
 _RAW_HTTP_URL = _require("OPBNB_HTTP_URL")
 HTTP_URLS = [u.strip() for u in _RAW_HTTP_URL.split(",") if u.strip()]
@@ -80,37 +76,20 @@ GEMINI_KEYS = [k for k in _optional("GEMINI_API_KEY").split(",") if k.strip()]
 GROQ_KEYS   = [k for k in _optional("GROQ_API_KEY").split(",")   if k.strip()]
 XAI_KEYS    = [k for k in _optional("XAI_API_KEY").split(",")    if k.strip()]
 
-XAI_MODEL    = os.getenv("XAI_MODEL", "grok-beta").strip() or "grok-beta"
-GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip() or "llama-3.3-70b-versatile"
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
-
 GOPLUS_APP_KEY    = _optional("GOPLUS_APP_KEY")
 GOPLUS_APP_SECRET = _optional("GOPLUS_APP_SECRET")
 
 # On-chain логирование (ТОЛЬКО для китов, не для подключённых кошельков)
-ENABLE_ONCHAIN    = _optional("ENABLE_ONCHAIN_LOG").strip().lower() in {"true", "1", "yes", "y"}
+ENABLE_ONCHAIN    = _optional("ENABLE_ONCHAIN_LOG") == "true"
 ONCHAIN_PRIVKEY   = _optional("WEB3_PRIVATE_KEY")
 ONCHAIN_CONTRACT  = _optional("VIBEGUARD_CONTRACT")
 
 # URL веб-приложения (Telegram WebApp для Connect Wallet)
-# Обязательно https:// — иначе в Telegram будет ERR_UNKNOWN_URL_SCHEME
-_raw_webapp = _optional("WEBAPP_URL", "").strip()
-if (_raw_webapp.startswith('"') and _raw_webapp.endswith('"')) or (
-    _raw_webapp.startswith("'") and _raw_webapp.endswith("'")
-):
-    _raw_webapp = _raw_webapp[1:-1].strip()
-_raw_webapp = _raw_webapp.rstrip("/")
-if _raw_webapp and not _raw_webapp.startswith("https://"):
-    logger.error(
-        "⚠️ WEBAPP_URL должен начинаться с https://. "
-        "Сейчас: %s — Telegram не откроет (ERR_UNKNOWN_URL_SCHEME). Исправь .env",
-        _raw_webapp[:50],
-    )
-WEBAPP_URL = _raw_webapp if (_raw_webapp and _raw_webapp.startswith("https://")) else ""
+WEBAPP_URL = _optional("WEBAPP_URL", "")
 
 LOGO_URL = _optional(
     "LOGO_URL",
-    "https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png"
+    "https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/logo.png"
 )
 
 OWNERS: set[int] = {PRIMARY_OWNER_ID}
@@ -165,111 +144,6 @@ log_queue: Queue = Queue(maxsize=8_000)
 # Флаг остановки и ссылки на задачи для graceful shutdown
 _shutdown    = False
 _main_tasks: list[asyncio.Task] = []
-
-
-async def _run_health_server() -> None:
-    port_raw = os.getenv("PORT", "").strip()
-    if not port_raw:
-        return
-    try:
-        port = int(port_raw)
-    except ValueError:
-        logger.warning("Invalid PORT value: %s", port_raw)
-        return
-
-    cors_headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Max-Age": "86400",
-    }
-
-    async def handle(_request: web.Request) -> web.Response:
-        return web.Response(text="ok", headers=cors_headers)
-
-    async def handle_webapp_connect_options(_request: web.Request) -> web.Response:
-        return web.Response(status=204, headers=cors_headers)
-
-    async def handle_webapp_connect(request: web.Request) -> web.Response:
-        try:
-            payload = await request.json()
-            logger.info(f"🌐 WebApp connect request: {payload}")
-        except Exception as e:
-            logger.error(f"❌ WebApp JSON error: {e}")
-            return web.json_response(
-                {"ok": False, "error": "bad json"},
-                status=400,
-                headers=cors_headers,
-            )
-
-        nonce = str(payload.get("nonce", "")).strip()
-        address = str(payload.get("address", "")).strip()
-        signature = str(payload.get("signature", "")).strip()
-        
-        logger.info(f"🔍 WebApp data: nonce={nonce[:8]}..., address={address[:10]}..., signature={signature[:20]}...")
-
-        if not nonce or not address or not signature:
-            logger.warning(f"❌ Missing fields: nonce={bool(nonce)}, address={bool(address)}, signature={bool(signature)}")
-            return web.json_response(
-                {"ok": False, "error": "missing fields"},
-                status=400,
-                headers=cors_headers,
-            )
-
-        uid: Optional[int] = None
-        async with db_lock:
-            for uid_str, p in db.get("pending_verifications", {}).items():
-                if str(p.get("nonce", "")) == nonce:
-                    try:
-                        uid = int(uid_str)
-                        logger.info(f"✅ Found user_id: {uid} for nonce: {nonce[:8]}...")
-                    except Exception:
-                        uid = None
-                    break
-
-        if uid is None:
-            logger.warning(f"❌ Session not found for nonce: {nonce[:8]}...")
-            return web.json_response(
-                {"ok": False, "error": "session not found"},
-                status=404,
-                headers=cors_headers,
-            )
-
-        logger.info(f"🔄 Calling verify_wallet for user {uid}")
-        success, message = await verify_wallet(uid, address, signature)
-        logger.info(f"📊 verify_wallet result: success={success}, message={message}")
-        
-        if success:
-            await safe_send(
-                uid,
-                f"✅ <b>Кошелёк подключён!</b>\n"
-                f"<code>{esc(address.lower())}</code>\n\n"
-                f"Теперь ты получаешь личные алерты о всех транзакциях этого адреса.",
-            )
-            return web.json_response({"ok": True}, headers=cors_headers)
-
-        return web.json_response(
-            {"ok": False, "error": str(message)[:200]},
-            status=400,
-            headers=cors_headers,
-        )
-
-    app = web.Application()
-    app.router.add_get("/", handle)
-    app.router.add_options("/webapp/connect", handle_webapp_connect_options)
-    app.router.add_post("/webapp/connect", handle_webapp_connect)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=port)
-    await site.start()
-    logger.info("✅ Health server listening on 0.0.0.0:%d", port)
-
-    try:
-        while not _shutdown:
-            await asyncio.sleep(1)
-    finally:
-        await runner.cleanup()
-        logger.info("✅ Health server stopped")
 
 # Кэш цен {symbol_or_address: price_usd}
 _price_cache:    dict[str, float] = {}
@@ -515,78 +389,6 @@ async def get_decimals(token_addr: str) -> int:
     return dec
 
 
-def calculate_vibe_score(tx_count: int, wallet_age_days: int, balance_usd: float) -> int:
-    score = 0
-
-    # 1. Активность (tx_count) — до 40
-    if tx_count > 1000:
-        score += 40
-    elif tx_count > 100:
-        score += 20
-    elif tx_count > 10:
-        score += 10
-
-    # 2. Возраст (wallet_age_days) — до 30
-    if wallet_age_days > 365:
-        score += 30
-    elif wallet_age_days > 90:
-        score += 15
-    elif wallet_age_days > 30:
-        score += 5
-
-    # 3. Баланс — до 30
-    if balance_usd > 100_000:
-        score += 30
-    elif balance_usd > 10_000:
-        score += 15
-    elif balance_usd > 1_000:
-        score += 5
-
-    return min(score, 100)
-
-
-def get_vibe_label(score: int) -> str:
-    if score >= 80:
-        return "🟢 TRUSTED WHALE (Безопасно)"
-    if score >= 50:
-        return "🟡 NEUTRAL (Средний риск)"
-    if score >= 20:
-        return "🟠 SUSPICIOUS (Подозрительно)"
-    return "🔴 HIGH DANGER (Скам/Флэш-бот)"
-
-
-async def get_tx_count(address: str) -> int:
-    data = await rpc({
-        "jsonrpc": "2.0",
-        "method": "eth_getTransactionCount",
-        "params": [address, "latest"],
-        "id": 1,
-    })
-    res = data.get("result", "0x0")
-    return int(res, 16) if res and res != "0x" else 0
-
-
-async def get_bnb_balance(address: str) -> float:
-    data = await rpc({
-        "jsonrpc": "2.0",
-        "method": "eth_getBalance",
-        "params": [address, "latest"],
-        "id": 1,
-    })
-    res = data.get("result", "0x0")
-    wei = int(res, 16) if res and res != "0x" else 0
-    return wei / 10 ** 18
-
-
-async def get_wallet_vibe(address: str) -> tuple[int, str, int, float]:
-    """Возвращает (score, label, tx_count, balance_usd). wallet_age_days пока недоступен без explorer API."""
-    tx_count = await get_tx_count(address)
-    bal_bnb = await get_bnb_balance(address)
-    bal_usd = await bnb_to_usd(bal_bnb)
-    score = calculate_vibe_score(tx_count=tx_count, wallet_age_days=0, balance_usd=bal_usd)
-    return score, get_vibe_label(score), tx_count, bal_usd
-
-
 # ---------------------------------------------------------------------------
 # ON-CHAIN ЛОГИРОВАНИЕ (только для китов, не для подключённых кошельков)
 # ---------------------------------------------------------------------------
@@ -611,28 +413,15 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
     Вызывается ТОЛЬКО для китовых транзакций.
     Для подключённых кошельков НЕ вызывается.
     """
-    if not ENABLE_ONCHAIN:
+    if not ENABLE_ONCHAIN or not ONCHAIN_PRIVKEY or not ONCHAIN_CONTRACT:
         return
-
-    if not ONCHAIN_PRIVKEY:
-        logger.warning("On-chain log skipped: WEB3_PRIVATE_KEY is not set")
-        return
-
-    if not ONCHAIN_CONTRACT:
-        logger.warning("On-chain log skipped: VIBEGUARD_CONTRACT is not set")
-        return
-
-    if not Web3.is_address(target):
-        logger.warning("On-chain log skipped: invalid target address: %s", str(target)[:16])
-        return
-
-    if not Web3.is_address(ONCHAIN_CONTRACT):
-        logger.warning("On-chain log skipped: invalid VIBEGUARD_CONTRACT: %s", str(ONCHAIN_CONTRACT)[:16])
+    if not Web3.is_address(target) or not Web3.is_address(ONCHAIN_CONTRACT):
         return
 
     # Запускаем в отдельном потоке — синхронный Web3
-    def _do_log(rpc_url: str):
-        w3 = Web3(Web3.HTTPProvider(rpc_url))
+    def _do_log():
+        # Используем первый URL из пула для on-chain логов
+        w3 = Web3(Web3.HTTPProvider(HTTP_URLS[0]))
         acct     = w3.eth.account.from_key(ONCHAIN_PRIVKEY)
         contract = w3.eth.contract(
             address=Web3.to_checksum_address(ONCHAIN_CONTRACT),
@@ -647,60 +436,16 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
             "gas":      130_000,
             "gasPrice": w3.eth.gas_price,
         })
-        signed = w3.eth.account.sign_transaction(tx, acct.key)
-        raw_tx = getattr(signed, "rawTransaction", None) or getattr(signed, "raw_transaction", None)
-        if raw_tx is None:
-            raise AttributeError(
-                "SignedTransaction missing raw transaction bytes (expected rawTransaction/raw_transaction)"
-            )
-        tx_hash = w3.eth.send_raw_transaction(raw_tx)
-        return tx_hash.hex(), acct.address
+        signed  = w3.eth.account.sign_transaction(tx, acct.key)
+        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        return tx_hash.hex()
 
-    loop = asyncio.get_running_loop()
-    urls = list(HTTP_URLS)
-    random.shuffle(urls)
-    urls = urls[: min(len(urls), 3)]
-
-    last_err: Optional[Exception] = None
-    for attempt in range(5):
-        for rpc_url in urls:
-            try:
-                tx_hash, from_addr = await loop.run_in_executor(None, _do_log, rpc_url)
-                logger.info(
-                    "On-chain log OK: %s... (from %s..., contract %s..., rpc %s...)",
-                    tx_hash[:20],
-                    from_addr[:10],
-                    str(ONCHAIN_CONTRACT)[:10],
-                    str(rpc_url)[:30],
-                )
-                return
-            except Exception as e:
-                last_err = e
-                msg = str(e)
-                if "429" in msg or "Too Many Requests" in msg or "rate" in msg.lower():
-                    continue
-                break
-
-        delay = min(2 ** attempt, 20)
-        await asyncio.sleep(delay)
-
-    logger.warning(
-        "On-chain log failed: %s | fromKeySet=%s contract=%s rpcs=%s",
-        str(last_err)[:180] if last_err else "unknown",
-        bool(ONCHAIN_PRIVKEY),
-        str(ONCHAIN_CONTRACT)[:16],
-        ",".join([u[:25] for u in urls]),
-    )
-
-
-def _build_webapp_url_with_nonce(base_url: str, nonce: str) -> str:
-    p = urlparse(base_url)
-    q = dict(parse_qsl(p.query, keep_blank_values=True))
-    q["nonce"] = nonce
-    q["v"] = str(int(time.time()))
-    if BOT_PUBLIC_URL:
-        q["api"] = BOT_PUBLIC_URL + "/webapp/connect"
-    return urlunparse(p._replace(query=urlencode(q)))
+    try:
+        loop    = asyncio.get_running_loop()
+        tx_hash = await loop.run_in_executor(None, _do_log)
+        logger.info(f"On-chain log OK: {tx_hash[:20]}...")
+    except Exception as e:
+        logger.warning(f"On-chain log failed: {str(e)[:100]}")
 
 
 # ---------------------------------------------------------------------------
@@ -733,30 +478,22 @@ async def _ai_request(provider: str, key: str, prompt: str) -> Optional[str]:
 
     if provider == "xai":
         url     = "https://api.x.ai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        headers = {"Authorization": f"Bearer {key}"}
         payload = {
-            "model": XAI_MODEL,
+            "model": "grok-2-latest",
             "messages": [{"role": "user", "content": prompt}],
         }
     elif provider == "groq":
         url     = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        headers = {"Authorization": f"Bearer {key}"}
         payload = {
-            "model": GROQ_MODEL,
+            "model": "llama-3.3-70b-versatile",
             "messages": [{"role": "user", "content": prompt}],
         }
     else:  # gemini
         url     = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{GEMINI_MODEL}:generateContent?key={key}"
+            f"gemini-2.0-flash:generateContent?key={key}"
         )
         headers = {}
         payload = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -767,12 +504,7 @@ async def _ai_request(provider: str, key: str, prompt: str) -> Optional[str]:
         if r.status == 429:
             raise RuntimeError("Rate limit 429")
         if r.status != 200:
-            body = ""
-            try:
-                body = (await r.text())[:500]
-            except Exception:
-                body = ""
-            raise RuntimeError(f"HTTP {r.status} {body}".strip())
+            raise RuntimeError(f"HTTP {r.status}")
         data = await r.json()
 
     if provider == "gemini":
@@ -901,65 +633,29 @@ async def process_bnb_tx(tx: dict) -> None:
         if val_usd < limit_usd:
             return
 
-        sender_score, sender_label, sender_txc, sender_bal_usd = await get_wallet_vibe(sender)
-        target_score, target_label, target_txc, target_bal_usd = await get_wallet_vibe(target)
+        async with db_lock:
+            db["stats"]["whales"] += 1
 
         whale_text = (
-            "🐳 <b>КИТ</b>\n\n"
+            f"🐳 <b>WHALE — BNB</b>\n"
             f"💰 <b>{val_bnb:.4f} BNB</b> (≈ ${val_usd:,.0f})\n"
             f"From: <code>{esc(sender)}</code>\n"
-            f"To:   <code>{esc(target)}</code>\n\n"
-            f"📈 <b>VibeScore отправителя:</b> <b>{sender_score}/100</b> — {esc(sender_label)}\n"
-            f"   tx={sender_txc:,} | bal≈${sender_bal_usd:,.0f}\n"
-            f"📈 <b>VibeScore получателя:</b> <b>{target_score}/100</b> — {esc(target_label)}\n"
-            f"   tx={target_txc:,} | bal≈${target_bal_usd:,.0f}"
+            f"To:   <code>{esc(target)}</code>"
         )
 
         if sender in watch or target in watch:
             await notify_owners(f"🎯 <b>WATCHLIST HIT</b>\n\n{whale_text}")
 
-        # Скам-проверка перед AI анализом
-        risks = await check_scam(target)
-        
-        # Улучшенный AI анализ с детализацией
         async with ai_sem:
-            # Формируем расширенный промпт для AI
-            tx_details = {
-                'value': str(int(val_bnb * 10**18)),
-                'gas': tx.get('gas', '0x5208'),
-                'gasPrice': tx.get('gasPrice', '0x0'),
-                'to': target,
-                'from': sender,
-                'hash': tx.get('hash', ''),
-                'blockNumber': tx.get('blockNumber', '')
-            }
-            
-            # Используем улучшенный AI анализ если доступен
-            try:
-                from agent_bot import analyze_event_ai
-                ai_analysis = await analyze_event_ai(
-                    status=f"Перевод {val_bnb:.4f} BNB (≈ ${val_usd:,.0f}) от {sender[:10]}... к {target[:10]}...",
-                    risk=1 if not risks else 5 if len(risks) > 2 else 3,
-                    tx_data=tx_details,
-                    user_address=str(watchers[0]) if watchers else None
-                )
-                verdict = ai_analysis
-            except ImportError:
-                # Fallback на старый метод если agent_bot не доступен
-                verdict = await call_ai(
-                    f"Анализ транзакции на русском языке:\n\n"
-                    f"💰 Сумма: {val_bnb:.4f} BNB (≈ ${val_usd:,.0f})\n"
-                    f"📤 Отправитель: {sender[:10]}...{sender[-6:]}\n"
-                    f"📥 Получатель: {target[:10]}...{target[-6:]}\n"
-                    f"⚠️ Риски: {', '.join(risks) if risks else 'Не обнаружены'}\n"
-                    f"📊 VibeScore отправителя: {sender_score}/100 ({sender_label})\n"
-                    f"📊 VibeScore получателя: {target_score}/100 ({target_label})\n\n"
-                    f"Проанализируй эту транзакцию, определи возможные риски и дай рекомендации. "
-                    f"Будь конкретным и детальным. Без HTML-тегов."
-                )
-        await notify_owners(f"{whale_text}\n\n🧠 <b>AI АНАЛИЗ:</b>\n{verdict}")
+            verdict = await call_ai(
+                f"Кратко на русском: перевод {val_bnb:.2f} BNB "
+                f"(${val_usd:,.0f}) от {sender} к {target}. "
+                f"Что это может значить? Без HTML-тегов."
+            )
+        await notify_owners(f"{whale_text}\n\n🧠 <b>AI:</b> {verdict}")
 
-        # Обнаруженные риски + on-chain логирование (только для китов!)
+        # Скам-проверка + on-chain логирование (только для китов!)
+        risks = await check_scam(target)
         if risks:
             async with db_lock:
                 db["stats"]["threats"] += 1
@@ -1043,42 +739,13 @@ async def process_erc20_log(log: dict) -> None:
         if sender in watch or receiver in watch:
             await notify_owners(f"🎯 <b>WATCHLIST TOKEN</b>\n\n{whale_text}")
 
-        # Улучшенный AI анализ для токенов
         async with ai_sem:
-            # Формируем детальные данные о транзакции токена
-            token_tx_details = {
-                'value': str(raw_amount),
-                'decimals': str(decimals),
-                'to': receiver,
-                'from': sender,
-                'token_address': token_addr,
-                'amount': str(amount),
-                'method': 'transfer'
-            }
-            
-            # Используем улучшенный AI анализ если доступен
-            try:
-                from agent_bot import analyze_event_ai
-                ai_analysis = await analyze_event_ai(
-                    status=f"Перевод {amount:,.2f} токенов (≈ ${val_usd:,.0f}) контракта {token_addr[:10]}...",
-                    risk=1 if not risks else 5 if len(risks) > 2 else 3,
-                    tx_data=token_tx_details,
-                    user_address=str(watchers[0]) if watchers else None
-                )
-                verdict = ai_analysis
-            except ImportError:
-                # Fallback на старый метод
-                verdict = await call_ai(
-                    f"Анализ транзакции токена на русском языке:\n\n"
-                    f"💰 Сумма: {amount:,.2f} токенов (≈ ${val_usd:,.0f})\n"
-                    f"🪙 Контракт: {token_addr[:10]}...{token_addr[-6:]}\n"
-                    f"📤 Отправитель: {sender[:10]}...{sender[-6:]}\n"
-                    f"📥 Получатель: {receiver[:10]}...{receiver[-6:]}\n"
-                    f"⚠️ Риски токена: {', '.join(risks) if risks else 'Не обнаружены'}\n\n"
-                    f"Проанализируй эту транзакцию токена, определи возможные риски и дай рекомендации. "
-                    f"Будь конкретным и детальным. Без HTML-тегов."
-                )
-        await notify_owners(f"{whale_text}\n\n🧠 <b>AI АНАЛИЗ:</b>\n{verdict}")
+            verdict = await call_ai(
+                f"Кратко на русском: перевод {amount:,.0f} токенов "
+                f"(${val_usd:,.0f}) контракта {token_addr}. "
+                f"Что это может значить? Без HTML-тегов."
+            )
+        await notify_owners(f"{whale_text}\n\n🧠 <b>AI:</b> {verdict}")
 
         risks = await check_scam(token_addr)
         if risks:
@@ -1227,28 +894,23 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
     Используется веб-приложением через callback /webapp_verify.
     """
     uid_str = str(user_id)
-    logger.info(f"🔍 verify_wallet called: user_id={user_id}, address={address[:10]}...{address[-6:]}")
 
     if not Web3.is_address(address):
-        logger.warning(f"❌ Invalid address: {address}")
         return False, "Невалидный адрес кошелька"
 
     async with db_lock:
         pending = db["pending_verifications"].get(uid_str)
 
     if not pending:
-        logger.warning(f"❌ No pending verification for user {user_id}")
         return False, "Сессия верификации не найдена. Нажми Connect Wallet заново."
 
     if time.time() - pending["ts"] > STATE_TTL:
-        logger.warning(f"❌ Verification session expired for user {user_id}")
         async with db_lock:
             db["pending_verifications"].pop(uid_str, None)
         return False, "Сессия истекла. Нажми Connect Wallet заново."
 
     nonce   = pending["nonce"]
     message = f"VibeGuard verification: {nonce}"
-    logger.info(f"📝 Verifying message: {message}")
 
     # Восстанавливаем адрес из подписи
     try:
@@ -1257,13 +919,10 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
         recovered   = w3_local.eth.account.recover_message(
             msg_defunct, signature=signature
         )
-        logger.info(f"🔐 Signature recovered: {recovered[:10]}...{recovered[-6:]}")
     except Exception as e:
-        logger.error(f"❌ Signature recovery error: {e}")
         return False, f"Невалидная подпись: {str(e)[:80]}"
 
     if recovered.lower() != address.lower():
-        logger.warning(f"❌ Address mismatch: expected={address[:10]}..., got={recovered[:10]}...")
         return False, (
             f"Подпись не совпадает с адресом.\n"
             f"Ожидался: {address[:8]}...\n"
@@ -1275,23 +934,18 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
     async with db_lock:
         wallets  = db["connected_wallets"].setdefault(uid_str, [])
         existing = [w["address"].lower() for w in wallets]
-        logger.info(f"💼 User {user_id} has {len(wallets)} wallets, existing: {len(existing)}")
 
         if addr_lower in existing:
-            logger.warning(f"❌ Wallet already connected: {addr_lower[:10]}...")
             return False, "Этот кошелёк уже подключён"
 
         if len(wallets) >= 5:
-            logger.warning(f"❌ Too many wallets for user {user_id}: {len(wallets)}")
             return False, "Максимум 5 кошельков на аккаунт"
 
         label = f"Wallet {len(wallets) + 1}"
         wallets.append({"address": addr_lower, "label": label})
         db["pending_verifications"].pop(uid_str, None)
-        logger.info(f"✅ Wallet saved: {addr_lower[:10]}... as {label} for user {user_id}")
 
     await save_db()
-    logger.info(f"💾 Database saved for user {user_id}")
     return True, f"✅ Кошелёк подключён: {addr_lower[:8]}...{addr_lower[-6:]}"
 
 
@@ -1300,15 +954,10 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
 # ---------------------------------------------------------------------------
 
 def kb_main() -> types.ReplyKeyboardMarkup:
-    """Профессиональная главная клавиатура"""
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    
-    # Основные функции
-    kb.add("� Мои кошельки", "🔗 Подключить кошелёк")
-    kb.add("� Статистика", "🔍 Проверить контракт")
-    kb.add("🧠 AI Ассистент", "⚙️ Настройки")
-    kb.add("🛡️ Поддержка")
-    
+    kb.add("📊 Status", "🧠 Ask AI")
+    kb.add("👛 My Wallets", "🔍 Check Contract")
+    kb.add("🛡️ Support")
     return kb
 
 
@@ -1317,7 +966,7 @@ def kb_connect_wallet() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup()
     if WEBAPP_URL:
         kb.add(types.InlineKeyboardButton(
-            "🔗 Подключить кошелёк",
+            "🔗 Connect Wallet",
             web_app=types.WebAppInfo(url=WEBAPP_URL),
         ))
     else:
@@ -1335,25 +984,19 @@ def kb_connect_wallet() -> types.InlineKeyboardMarkup:
 @bot.message_handler(commands=["start"])
 async def cmd_start(m: types.Message) -> None:
     clear_state(m.from_user.id)
-    
-    # Профессиональное приветственное сообщение
-    welcome_text = (
-        "🛡️ <b>VibeGuard AI Sentinel</b> v24.0\n\n"
-        "🚀 <b>Интеллектуальная защита крипто-активов</b>\n\n"
-        "✨ <b>Основные возможности:</b>\n"
-        "🔔 Персональные алерты о транзакциях\n"
-        "🐳 Мониторинг крупных перемещений\n"
-        "🤖 AI-анализ рисков и угроз\n"
-        "🛡️ Проверка скам-контрактов\n\n"
-        "<b>Начните работу:</b>\n"
-        "👛 Нажмите «Мои кошельки» для управления\n"
-        "🔗 Подключите кошелёк для алертов\n"
-        "📊 Изучайте статистику китов"
-    )
-    
     await bot.send_photo(
         m.chat.id, LOGO_URL,
-        caption=welcome_text,
+        caption=(
+            "🛡️ <b>VibeGuard Sentinel v24.0</b>\n\n"
+            "Мониторинг китов и скам-контрактов на opBNB.\n\n"
+            "<b>Основные команды:</b>\n"
+            "/connect — подключить кошелёк\n"
+            "/mywallets — мои кошельки\n"
+            "/disconnect — отвязать кошелёк\n"
+            "/check 0x... — проверить контракт\n"
+            "/limit — порог уведомлений\n"
+            "/status — статистика бота"
+        ),
         reply_markup=kb_main(),
     )
 
@@ -1377,12 +1020,12 @@ async def cmd_connect(m: types.Message) -> None:
     await save_db()
 
     # Формируем URL с nonce как query-параметр
-    webapp_url_with_nonce = _build_webapp_url_with_nonce(WEBAPP_URL, nonce) if WEBAPP_URL else ""
+    webapp_url_with_nonce = f"{WEBAPP_URL}?nonce={nonce}" if WEBAPP_URL else ""
 
     kb = types.InlineKeyboardMarkup()
     if WEBAPP_URL:
         kb.add(types.InlineKeyboardButton(
-            "🔗 Подключить кошелёк",
+            "🔗 Connect Wallet",
             web_app=types.WebAppInfo(url=webapp_url_with_nonce),
         ))
     else:
@@ -1451,13 +1094,10 @@ async def cmd_mywallets(m: types.Message) -> None:
         wallets = list(db["connected_wallets"].get(str(uid), []))
 
     if not wallets:
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("🔗 Подключить кошелёк", callback_data="connect_new"))
         await bot.reply_to(
             m,
             "👛 У тебя нет подключённых кошельков.\n"
-            "Нажми кнопку ниже чтобы подключить:",
-            reply_markup=kb
+            "/connect — подключить.",
         )
         return
 
@@ -1468,25 +1108,12 @@ async def cmd_mywallets(m: types.Message) -> None:
         f"{i+1}. <b>{esc(w['label'])}</b>\n   <code>{esc(w['address'])}</code>"
         for i, w in enumerate(wallets)
     )
-    
-    # Добавляем кнопки управления
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    for i, w in enumerate(wallets):
-        short = f"{w['address'][:6]}...{w['address'][-4:]}"
-        kb.add(types.InlineKeyboardButton(
-            f"❌ {w['label']} ({short})",
-            callback_data=f"dc:{uid}:{i}",
-        ))
-    
-    kb.add(types.InlineKeyboardButton("🔗 Добавить кошелёк", callback_data="connect_new"))
-    
     await bot.reply_to(
         m,
         f"👛 <b>Твои кошельки ({len(wallets)}/5):</b>\n\n"
         f"{lines}\n\n"
         f"🔔 Алерты при любом движении.\n"
         f"🐳 Глобальный лимит китов: <b>${limit:,.0f}</b>",
-        reply_markup=kb
     )
 
 
@@ -1511,24 +1138,8 @@ async def cmd_disconnect(m: types.Message) -> None:
     await bot.reply_to(m, "Выбери кошелёк для отключения:", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("dc:") or c.data == "connect_new")
-async def cb_wallet_action(c: types.CallbackQuery) -> None:
-    if c.data == "connect_new":
-        # Обработка кнопки "Подключить кошелёк"
-        await cmd_connect(types.Message(
-            message_id=c.message.message_id,
-            from_user=c.from_user,
-            date=int(time.time()),
-            chat=c.message.chat,
-            content_type="text",
-            options={},
-            json_string="",
-            text="/connect"
-        ))
-        await bot.answer_callback_query(c.id)
-        return
-    
-    # Обработка отключения кошелька
+@bot.callback_query_handler(func=lambda c: c.data.startswith("dc:"))
+async def cb_disconnect(c: types.CallbackQuery) -> None:
     parts = c.data.split(":")
     if parts[1] == "cancel":
         await bot.answer_callback_query(c.id, "Отменено")
@@ -1556,18 +1167,11 @@ async def cb_wallet_action(c: types.CallbackQuery) -> None:
 
     await save_db()
     await bot.answer_callback_query(c.id, "✅ Кошелёк отключён")
-    
-    # Показываем обновленный список кошельков
-    await cmd_mywallets(types.Message(
-        message_id=c.message.message_id,
-        from_user=c.from_user,
-        date=int(time.time()),
-        chat=c.message.chat,
-        content_type="text",
-        options={},
-        json_string="",
-        text="/mywallets"
-    ))
+    await bot.edit_message_text(
+        f"✅ Кошелёк отключён:\n<code>{esc(removed['address'])}</code>",
+        c.message.chat.id,
+        c.message.message_id,
+    )
 
 
 @bot.message_handler(commands=["check"])
@@ -1583,8 +1187,6 @@ async def cmd_check(m: types.Message) -> None:
 
     wait = await bot.reply_to(m, "🔍 Проверяю контракт...")
     risks = await check_scam(addr)
-
-    score = 25 if risks else 85
 
     if risks:
         icon, status = "🚨", f"Риски: {', '.join(risks)}"
@@ -1606,7 +1208,6 @@ async def cmd_check(m: types.Message) -> None:
         f"{icon} <b>Проверка контракта</b>\n"
         f"<code>{esc(addr)}</code>\n\n"
         f"<b>Статус:</b> {esc(status)}\n\n"
-        f"📈 <b>Оценка:</b> <b>{score}/100</b>\n\n"
         f"🧠 <b>AI:</b> {verdict}"
     )
     try:
@@ -1757,28 +1358,24 @@ async def cmd_cancel(m: types.Message) -> None:
 
 
 @bot.message_handler(func=lambda m: m.text in {
-    "📊 Статистика", "🧠 AI Ассистент", "👛 Мои кошельки", "🔍 Проверить контракт", "🔗 Подключить кошелёк", "🛡️ Поддержка"
+    "📊 Status", "🧠 Ask AI", "👛 My Wallets", "🔍 Check Contract", "🛡️ Support"
 })
 async def handle_menu(m: types.Message) -> None:
     t = m.text
-    if t == "📊 Статистика":
+    if t == "📊 Status":
         await cmd_status(m)
-    elif t == "🧠 AI Ассистент":
+    elif t == "🧠 Ask AI":
         set_state(m.from_user.id, "ask_ai")
         await bot.reply_to(
             m,
             "🤖 Задай любой вопрос о крипте или контрактах.\n/cancel — выйти.",
         )
-    elif t == "👛 Мои кошельки":
+    elif t == "👛 My Wallets":
         await cmd_mywallets(m)
-    elif t == "🔍 Проверить контракт":
+    elif t == "🔍 Check Contract":
         set_state(m.from_user.id, "check_contract")
         await bot.reply_to(m, "Отправь адрес контракта для проверки:")
-    elif t == "🔗 Подключить кошелёк":
-        await cmd_connect(m)
-    elif t == "⚙️ Настройки":
-        await bot.reply_to(m, "⚙️ Настройки в разработке...")
-    elif t == "🛡️ Поддержка":
+    elif t == "🛡️ Support":
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("Связаться с менеджером", url="https://t.me/tarran6"))
         await bot.send_message(m.chat.id, "Нужна помощь?", reply_markup=kb)
@@ -1842,7 +1439,7 @@ async def graceful_shutdown(sig_name: str) -> None:
 # ---------------------------------------------------------------------------
 
 async def main() -> None:
-    global http_session, _shutdown
+    global http_session
 
     # Сигналы — регистрируем первыми (на Windows SIGTERM может быть недоступен)
     loop = asyncio.get_event_loop()
@@ -1869,13 +1466,6 @@ async def main() -> None:
             if attempt < 2:
                 await asyncio.sleep(3)
 
-    # Проверка доступа к Telegram API (диагностика)
-    try:
-        me = await bot.get_me()
-        logger.info("✅ Telegram API OK: @%s (%s)", getattr(me, "username", "?"), getattr(me, "id", "?"))
-    except Exception as e:
-        logger.error("❌ Telegram API check failed: %s", str(e)[:200], exc_info=True)
-
     # HTTP сессия
     connector    = aiohttp.TCPConnector(limit=50, ttl_dns_cache=300)
     http_session = aiohttp.ClientSession(connector=connector)
@@ -1894,64 +1484,20 @@ async def main() -> None:
         f"onchain={'ON' if ENABLE_ONCHAIN else 'OFF'}"
     )
 
-    async def _polling_forever() -> None:
-        logger.info("🛰️ Polling task initialized (shutdown=%s)", _shutdown)
-        while not _shutdown:
-            try:
-                logger.info("📡 Polling started")
-                await bot.infinity_polling(
-                    timeout=30,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                msg = str(e)
-                if "409" in msg and "Conflict" in msg:
-                    logger.warning(
-                        "Telegram 409 conflict (another instance polling). "
-                        "Backing off and retrying... (%s)",
-                        msg[:200],
-                    )
-                    await asyncio.sleep(12)
-                    continue
-
-                logger.error("Polling crashed: %s", msg[:200], exc_info=True)
-                await asyncio.sleep(3)
-
     # Задачи
-    logger.info("🛰️ Creating polling task...")
-    polling_task = asyncio.create_task(_polling_forever())
-
-    def _log_task_done(t: asyncio.Task) -> None:
-        try:
-            exc = t.exception()
-            if exc is not None:
-                logger.error(
-                    "❌ Polling task finished with error: %s",
-                    str(exc)[:200],
-                    exc_info=exc,
-                )
-            else:
-                logger.warning("⚠️ Polling task finished without error (shutdown=%s)", _shutdown)
-        except asyncio.CancelledError:
-            logger.info("ℹ️ Polling task cancelled")
-        except Exception as e:
-            logger.error("❌ Polling task done-callback error: %s", str(e)[:200], exc_info=True)
-
-    polling_task.add_done_callback(_log_task_done)
-
-    health_task  = asyncio.create_task(_run_health_server())
+    polling_task = asyncio.create_task(
+        bot.infinity_polling(allowed_updates=["message", "callback_query"])
+    )
     monitor_task = asyncio.create_task(monitor())
     tx_workers   = [asyncio.create_task(tx_worker(i))  for i in range(6)]
     log_workers  = [asyncio.create_task(log_worker(i)) for i in range(4)]
 
     # Регистрируем для отмены при shutdown
-    _main_tasks.extend([polling_task, health_task, monitor_task])
+    _main_tasks.extend([polling_task, monitor_task])
 
     try:
         await asyncio.gather(
             polling_task,
-            health_task,
             monitor_task,
             *tx_workers,
             *log_workers,
