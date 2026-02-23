@@ -20,50 +20,61 @@
       blockExplorers: { default: { name: 'opBNBScan', url: 'https://opbnbscan.com' } }
     };
 
+    // Получаем nonce из URL (startapp или nonce)
     const urlParams = new URLSearchParams(window.location.search);
-    const NONCE = urlParams.get('nonce') || urlParams.get('startapp') || 'session_' + Math.floor(Math.random() * 1000);
+    const NONCE = urlParams.get('startapp') || urlParams.get('nonce');
     const tg = window.Telegram?.WebApp;
 
-    if (tg) {
-      tg.expand();
-      tg.ready();
+    // Проверка запуска внутри Telegram
+    if (!tg || !tg.sendData) {
+      document.body.innerHTML = '<div style="background:#0a0a0c;color:white;text-align:center;padding:50px;"><h2>🛡️ VibeGuard</h2><p>Откройте эту страницу через бота в Telegram.</p></div>';
+      throw new Error('Not in Telegram');
     }
 
-    const modal = createAppKit({
-      networks: [opBNB, bsc, mainnet],
-      projectId: 'add9137cea1e48432cd4ba404f4a7443',
-      metadata: {
-        name: 'VibeGuard AI',
-        description: 'Crypto Security Analysis',
-        url: 'https://vibe-guard-ai.vercel.app',
-        icons: ['https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png']
-      },
-      themeMode: 'dark'
-    });
+    tg.expand();
+    tg.ready();
+
+    // Проверка наличия nonce
+    if (!NONCE) {
+      document.body.innerHTML = '<div style="background:#0a0a0c;color:white;text-align:center;padding:50px;"><h2>❌ Ошибка</h2><p>Сессия не найдена. Нажмите /connect в боте заново.</p></div>';
+      throw new Error('No nonce provided');
+    }
+
+    // Создаём модалку WalletConnect
+    let modal;
+    try {
+      modal = createAppKit({
+        networks: [opBNB, bsc, mainnet],
+        projectId: 'add9137cea1e48432cd4ba404f4a7443',
+        metadata: {
+          name: 'VibeGuard AI',
+          description: 'Crypto Security Analysis',
+          url: window.location.origin,
+          icons: ['https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png']
+        },
+        themeMode: 'dark'
+      });
+      console.log('AppKit создан');
+    } catch (e) {
+      console.error('Ошибка создания AppKit:', e);
+      document.body.innerHTML = '<div style="background:#0a0a0c;color:white;text-align:center;padding:50px;"><h2>❌ Ошибка</h2><p>Не удалось инициализировать WalletConnect.</p></div>';
+      throw e;
+    }
 
     window.connectWallet = async () => {
       const status = document.getElementById('status');
       status.style.display = 'block';
-      status.textContent = 'Инициализация...';
-      
-      try {
-        // ИСПРАВЛЕНИЕ: Используем правильный метод для проверки подключения
-        const account = modal.getAccount();
-        
-        if (account && account.isConnected) {
-          console.log("Уже подключен, переходим к подписи");
-          await signVibeMessage();
-          return;
-        }
+      status.textContent = 'Открываем выбор кошелька...';
 
-        console.log("Открываем окно выбора кошельков...");
-        status.textContent = 'Выберите кошелёк...';
+      try {
+        // Открываем модалку
         await modal.open();
 
-        // Подписка на успешное соединение
-        modal.subscribeAccount(async (state) => {
-          if (state.isConnected) {
-            await signVibeMessage();
+        // Подписываемся на успешное подключение
+        modal.subscribeEvents(async (event) => {
+          if (event.data.event === 'CONNECT_SUCCESS') {
+            status.textContent = 'Кошелёк подключён, запрашиваем подпись...';
+            await signMessage();
           }
         });
 
@@ -73,38 +84,27 @@
       }
     };
 
-    async function signVibeMessage() {
-      const status = document.getElementById('status');
-      status.textContent = 'Подтвердите подпись в приложении кошелька...';
-
+    async function signMessage() {
       try {
         const provider = modal.getWalletProvider();
-        if (!provider) throw new Error('Провайдер не найден. Попробуйте выбрать кошелек снова.');
-
-        // Редирект для мобилок
-        if (/Android|iPhone|iPad/i.test(navigator.userAgent)) {
-          setTimeout(() => { window.location.href = "wc:"; }, 200);
-        }
+        if (!provider) throw new Error('Провайдер не найден');
 
         const ethersProvider = new ethers.BrowserProvider(provider);
         const signer = await ethersProvider.getSigner();
         const address = await signer.getAddress();
-        
-        const message = `VibeGuard Auth\nNonce: ${NONCE}`;
+
+        const message = `VibeGuard verification: ${NONCE}`;
         const signature = await signer.signMessage(message);
 
-        if (tg) {
-          tg.sendData(JSON.stringify({
-            address: address,
-            signature: signature,
-            nonce: NONCE
-          }));
-          
-          status.textContent = '✅ Верификация успешна!';
-          setTimeout(() => tg.close(), 1000);
-        }
+        tg.sendData(JSON.stringify({
+          address: address,
+          signature: signature
+        }));
+
+        document.getElementById('status').textContent = '✅ Успешно! Закрываем...';
+        setTimeout(() => tg.close(), 1000);
       } catch (err) {
-        status.textContent = 'Ошибка подписи. Откройте кошелек и подтвердите запрос.';
+        document.getElementById('status').textContent = 'Ошибка подписи: ' + err.message;
         console.error(err);
       }
     }
