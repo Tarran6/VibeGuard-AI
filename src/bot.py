@@ -1197,6 +1197,51 @@ async def cb_connect_new(c: types.CallbackQuery) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ОБРАБОТКА ДАННЫХ FROM WEBAPP
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(content_types=["web_app_data"])
+async def handle_webapp_data(m: types.Message) -> None:
+    """
+    Telegram отправляет результат WebApp сюда.
+    WebApp передаёт JSON: {"address": "0x...", "signature": "0x...", "nonce": "..."}
+    """
+    uid = m.from_user.id
+    logger.info(f"📥 Получены данные WebApp от user_id={uid}")
+    
+    try:
+        data = json.loads(m.web_app_data.data)
+        address = data.get("address", "").strip()
+        sig = data.get("signature", "").strip()
+        nonce = data.get("nonce", "").strip()
+        
+        logger.info(f"📥 WebApp данные: address={address[:8]}..., nonce={nonce[:8]}...")
+    except Exception as e:
+        logger.warning(f"webapp_data parse error uid={uid}: {e}")
+        await safe_send(uid, "❌ Ошибка данных от WebApp. Попробуй ещё раз.")
+        return
+
+    if not address or not sig or not nonce:
+        await safe_send(uid, "❌ Неполные данные от WebApp.")
+        return
+
+    success, message = await verify_wallet(uid, address, sig)
+
+    if success:
+        await safe_send(
+            uid,
+            f"✅ <b>Кошелёк подключён!</b>\n"
+            f"<code>{esc(address.lower())}</code>\n\n"
+            f"Теперь ты получаешь личные алерты о всех транзакциях "
+            f"этого адреса.",
+        )
+        logger.info(f"✅ Кошелёк подключён: {address[:8]}... для user_id={uid}")
+    else:
+        await safe_send(uid, f"❌ {esc(message)}")
+        logger.warning(f"❌ Ошибка подключения кошелька: {message}")
+
+
+# ---------------------------------------------------------------------------
 # КОМАНДЫ БЕЗ ИЗМЕНЕНИЙ
 # ---------------------------------------------------------------------------
 
