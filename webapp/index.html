@@ -19,12 +19,24 @@
       blockExplorers: { default: { name: 'opBNBScan', url: 'https://opbnbscan.com' } }
     };
 
+    // Получаем параметры из URL
     const urlParams = new URLSearchParams(window.location.search);
     const NONCE = urlParams.get('startapp') || urlParams.get('nonce');
+    const API_URL = urlParams.get('api') || 'https://vibeguard-ai-production-7512.up.railway.app/webapp/connect';
     const tg = window.Telegram?.WebApp;
 
-    if (tg) { tg.expand(); tg.ready(); }
+    if (tg) {
+      tg.expand();
+      tg.ready();
+    }
 
+    // Проверка наличия nonce
+    if (!NONCE) {
+      document.body.innerHTML = '<div style="background:#0a0a0c;color:white;text-align:center;padding:50px;"><h2>❌ Ошибка</h2><p>Сессия не найдена. Нажмите /connect в боте заново.</p></div>';
+      throw new Error('No nonce');
+    }
+
+    // Создаём модалку WalletConnect
     const modal = createAppKit({
       networks: [opBNB, bsc, mainnet],
       projectId: 'add9137cea1e48432cd4ba404f4a7443',
@@ -39,18 +51,18 @@
 
     let isProcessing = false;
 
+    // Функция подписи и отправки на сервер
     async function signMessage() {
       if (isProcessing) return;
       isProcessing = true;
-      
+
       const status = document.getElementById('status');
       try {
-        status.textContent = '✍️ Подпишите сообщение в кошельке...';
-        
-        await new Promise(r => setTimeout(r, 1000));
+        status.textContent = '✍️ Подписываем в кошельке...';
+
+        // Получаем провайдер
         let provider = modal.getWalletProvider() || modal.getState()?.provider;
-        
-        if (!provider) throw new Error('Кошелек не предоставил доступ. Переподключитесь.');
+        if (!provider) throw new Error('Провайдер не найден. Переподключитесь.');
 
         const ethersProvider = new ethers.BrowserProvider(provider);
         const signer = await ethersProvider.getSigner();
@@ -59,35 +71,49 @@
         const message = `VibeGuard verification: ${NONCE}`;
         const signature = await signer.signMessage(message);
 
-        // Отправляем nonce вместе с подписью
-        tg.sendData(JSON.stringify({
-          address: address,
-          signature: signature,
-          nonce: NONCE 
-        }));
+        status.textContent = '📡 Отправляем данные боту...';
 
-        status.textContent = '✅ Успешно! Возвращаемся...';
-        setTimeout(() => tg.close(), 1200);
+        // Прямая отправка на сервер
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            address: address,
+            signature: signature,
+            nonce: NONCE
+          })
+        });
 
+        const result = await response.json();
+        if (result.ok) {
+          status.textContent = '✅ Кошелёк привязан!';
+          setTimeout(() => {
+            if (tg) tg.close();
+          }, 1500);
+        } else {
+          throw new Error(result.error || 'Ошибка при сохранении');
+        }
       } catch (err) {
         status.textContent = '❌ ' + err.message;
-        isProcessing = false;
         console.error(err);
+        isProcessing = false; // разрешаем повторную попытку
       }
     }
 
     window.connectWallet = async () => {
       const status = document.getElementById('status');
       status.style.display = 'block';
-      
+
       const state = modal.getState();
-      
+
+      // Если кошелёк уже подключён (есть адрес), сразу подписываем
       if (state?.address && state?.isConnected) {
         await signMessage();
       } else {
-        status.textContent = '💎 Выберите кошелек из списка...';
+        status.textContent = '💎 Выберите кошелёк из списка...';
         await modal.open();
-        
+
+        // Ждём подключения и подписываем один раз
         const unsubscribe = modal.subscribeAccount(async (newState) => {
           if (newState.isConnected && newState.address && !isProcessing) {
             unsubscribe();
@@ -97,9 +123,13 @@
       }
     };
   </script>
+
   <style>
-    body { font-family: sans-serif; background: #0a0a0c; color: white; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+    body { font-family: -apple-system, system-ui, sans-serif; background: #0a0a0c; color: white; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
     .container { background: #121216; border-radius: 24px; padding: 32px; width: 90%; max-width: 340px; text-align: center; border: 1px solid #26262c; }
+    .logo { font-size: 50px; margin-bottom: 10px; }
+    h2 { margin: 10px 0; font-size: 24px; }
+    p { color: #8e8e93; font-size: 14px; margin-bottom: 25px; }
     .btn-main { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; border: none; border-radius: 16px; padding: 18px; width: 100%; font-size: 16px; font-weight: 700; cursor: pointer; transition: 0.2s; }
     .btn-main:active { transform: scale(0.98); }
     #status { margin-top: 20px; color: #6366f1; display: none; font-size: 14px; }
@@ -107,9 +137,9 @@
 </head>
 <body>
   <div class="container">
-    <div style="font-size: 50px; margin-bottom: 10px;">🛡️</div>
+    <div class="logo">🛡️</div>
     <h2>VibeGuard AI</h2>
-    <p style="color: #8e8e93; font-size: 14px; margin-bottom: 25px;">Авторизуйтесь через MetaMask или OKX</p>
+    <p>Авторизуйтесь через MetaMask, OKX или любой другой кошелёк</p>
     <button class="btn-main" onclick="connectWallet()">🚀 Подключить кошелёк</button>
     <div id="status">Загрузка...</div>
   </div>
