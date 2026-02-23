@@ -76,7 +76,6 @@
           
           if (state?.provider) {
             console.log('Провайдер найден через getState');
-            // Используем provider из state
             const ethersProvider = new ethers.BrowserProvider(state.provider);
             const signer = await ethersProvider.getSigner();
             const address = await signer.getAddress();
@@ -112,30 +111,32 @@
       }
     }
 
-    // Подключаем кошелёк с вашей логикой
+    // Подключаем кошелёк с надёжной проверкой
     window.connectWallet = async () => {
       const status = document.getElementById('status');
       status.style.display = 'block';
 
       try {
-        // 1. Проверяем, может кошелек УЖЕ подключен?
-        const account = modal.getAccount();
-        
-        if (account && account.isConnected) {
-          status.textContent = 'Кошелёк уже на связи, запрашиваем подпись...';
+        // Получаем полное состояние
+        const state = modal.getState();
+        const hasRealConnection = state?.address && state?.isConnected;
+
+        if (hasRealConnection) {
+          // Если есть реальный адрес, идём подписывать
+          status.textContent = 'Кошелёк уже подключён, запрашиваем подпись...';
           await signMessage();
           return;
         }
 
-        // 2. Если не подключен — открываем выбор
+        // Нет реального подключения — открываем выбор кошелька
         status.textContent = 'Открываем выбор кошелька...';
         await modal.open();
 
-        // 3. Слушаем только один раз для первой привязки
-        const unsubscribe = modal.subscribeAccount(async (state) => {
-          if (state.isConnected) {
-            unsubscribe(); // Отписываемся, чтобы не частить
-            status.textContent = 'Кошелёк привязан, запрашиваем подпись...';
+        // Подписываемся на первое успешное подключение
+        const unsubscribe = modal.subscribeAccount(async (newState) => {
+          if (newState.address && newState.isConnected) {
+            unsubscribe(); // Отписываемся сразу
+            status.textContent = 'Кошелёк подключён, запрашиваем подпись...';
             await signMessage();
           }
         });
