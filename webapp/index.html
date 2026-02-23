@@ -61,33 +61,36 @@
       throw e;
     }
 
-    window.connectWallet = async () => {
-      const status = document.getElementById('status');
-      status.style.display = 'block';
-      status.textContent = 'Открываем выбор кошелька...';
-
-      try {
-        // Открываем модалку
-        await modal.open();
-
-        // Подписываемся на успешное подключение
-        modal.subscribeEvents(async (event) => {
-          if (event.data.event === 'CONNECT_SUCCESS') {
-            status.textContent = 'Кошелёк подключён, запрашиваем подпись...';
-            await signMessage();
-          }
-        });
-
-      } catch (err) {
-        status.textContent = 'Ошибка: ' + err.message;
-        console.error(err);
-      }
-    };
-
+    // Функция подписи (вынесена отдельно)
     async function signMessage() {
+      const status = document.getElementById('status');
       try {
+        // Небольшая задержка для стабильности
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
         const provider = modal.getWalletProvider();
-        if (!provider) throw new Error('Провайдер не найден');
+        if (!provider) {
+          // Пробуем получить провайдер ещё раз через getState
+          const state = modal.getState();
+          console.log('Состояние AppKit:', state);
+          
+          if (state?.provider) {
+            console.log('Провайдер найден через getState');
+            // Используем provider из state
+            const ethersProvider = new ethers.BrowserProvider(state.provider);
+            const signer = await ethersProvider.getSigner();
+            const address = await signer.getAddress();
+            const message = `VibeGuard verification: ${NONCE}`;
+            const signature = await signer.signMessage(message);
+            
+            tg.sendData(JSON.stringify({ address, signature }));
+            status.textContent = '✅ Успешно! Закрываем...';
+            setTimeout(() => tg.close(), 1000);
+            return;
+          }
+          
+          throw new Error('Провайдер не найден. Попробуйте ещё раз.');
+        }
 
         const ethersProvider = new ethers.BrowserProvider(provider);
         const signer = await ethersProvider.getSigner();
@@ -101,13 +104,47 @@
           signature: signature
         }));
 
-        document.getElementById('status').textContent = '✅ Успешно! Закрываем...';
+        status.textContent = '✅ Успешно! Закрываем...';
         setTimeout(() => tg.close(), 1000);
       } catch (err) {
-        document.getElementById('status').textContent = 'Ошибка подписи: ' + err.message;
+        status.textContent = 'Ошибка подписи: ' + err.message;
         console.error(err);
       }
     }
+
+    // Подключаем кошелёк с вашей логикой
+    window.connectWallet = async () => {
+      const status = document.getElementById('status');
+      status.style.display = 'block';
+
+      try {
+        // 1. Проверяем, может кошелек УЖЕ подключен?
+        const account = modal.getAccount();
+        
+        if (account && account.isConnected) {
+          status.textContent = 'Кошелёк уже на связи, запрашиваем подпись...';
+          await signMessage();
+          return;
+        }
+
+        // 2. Если не подключен — открываем выбор
+        status.textContent = 'Открываем выбор кошелька...';
+        await modal.open();
+
+        // 3. Слушаем только один раз для первой привязки
+        const unsubscribe = modal.subscribeAccount(async (state) => {
+          if (state.isConnected) {
+            unsubscribe(); // Отписываемся, чтобы не частить
+            status.textContent = 'Кошелёк привязан, запрашиваем подпись...';
+            await signMessage();
+          }
+        });
+
+      } catch (err) {
+        status.textContent = 'Ошибка: ' + err.message;
+        console.error(err);
+      }
+    };
   </script>
 
   <style>
