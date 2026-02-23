@@ -9,9 +9,9 @@
   <!-- Reown AppKit (WalletConnect) -->
   <script type="module">
     import { createAppKit } from 'https://unpkg.com/@reown/appkit@1.6.0/dist/esm/index.js'
-    import { mainnet, bsc, sepolia } from 'https://unpkg.com/@reown/appkit/networks@1.6.0/dist/esm/index.js'
-    
-    // Добавляем opBNB (chainId: 204) если его нет в списке
+    import { mainnet, bsc } from 'https://unpkg.com/@reown/appkit/networks@1.6.0/dist/esm/index.js'
+
+    // Определяем сеть opBNB (chainId 204)
     const opBNB = {
       id: 204,
       name: 'opBNB Mainnet',
@@ -21,16 +21,34 @@
         decimals: 18
       },
       rpcUrls: {
-        default: { http: ['https://opbnb-mainnet.nodereal.io/v1/your-key'] }
+        default: { http: ['https://opbnb-mainnet.nodereal.io/v1/YOUR-KEY'] } // Замените на ваш RPC URL
       },
       blockExplorers: {
         default: { name: 'opBNBScan', url: 'https://opbnbscan.com' }
       }
     }
-    
-    // Создаём модалку
+
+    // Получаем nonce из Telegram WebApp initDataUnsafe (или из URL как запасной вариант)
+    const tg = window.Telegram?.WebApp;
+    let NONCE = '';
+
+    if (tg?.initDataUnsafe?.start_param) {
+      // Если бот передал start_param (например, через кнопку с ?startapp=nonce)
+      NONCE = tg.initDataUnsafe.start_param;
+    } else {
+      // Запасной вариант: берём из URL (на случай, если открыли напрямую)
+      const urlParams = new URLSearchParams(window.location.search);
+      NONCE = urlParams.get('nonce') || '';
+    }
+
+    // Если nonce найден, очищаем URL от него (чтобы не светился)
+    if (NONCE) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+
+    // Создаём модалку WalletConnect
     const modal = createAppKit({
-      projectId: 'add9137cea1e48432cd4ba404f4a7443', // ваш REOWN_PROJECT_ID
+      projectId: 'add9137cea1e48432cd4ba404f4a7443', // Ваш REOWN_PROJECT_ID
       networks: [opBNB, bsc, mainnet],
       metadata: {
         name: 'VibeGuard AI',
@@ -40,55 +58,54 @@
       },
       themeMode: 'dark',
       allWallets: 'SHOW' // показывать все доступные кошельки
-    })
-    
-    // Получаем nonce из URL (временно, потом заменим на Telegram.initData)
-    const urlParams = new URLSearchParams(window.location.search)
-    const NONCE = urlParams.get('nonce') || ''
-    
-    // Очищаем URL от nonce
-    if (NONCE) {
-      window.history.replaceState(null, '', window.location.pathname)
-    }
-    
-    // Когда пользователь выбирает кошелёк
-    modal.subscribeProvider((state) => {
-      if (state.provider && state.address) {
-        // Подписываем сообщение с nonce
-        const signMessage = async () => {
-          try {
-            const signature = await state.provider.request({
-              method: 'personal_sign',
-              params: [`VibeGuard verification: ${NONCE}`, state.address]
-            })
-            
-            // Отправляем результат в бота
-            window.Telegram.WebApp.sendData(JSON.stringify({
-              address: state.address,
-              signature: signature
-            }))
-            
-            document.getElementById('status').style.display = 'block'
-            document.getElementById('status').textContent = '✅ Подписано! Закрываем...'
-            setTimeout(() => window.Telegram.WebApp.close(), 1000)
-          } catch (e) {
-            alert('Ошибка подписи: ' + e.message)
-          }
-        }
-        signMessage()
-      }
-    })
-    
-    // Кнопка подключения
-    window.connectWallet = () => {
+    });
+
+    // Функция для подключения кошелька
+    window.connectWallet = async () => {
       if (!NONCE) {
-        alert('Сессия не найдена. Вернитесь в бота и нажмите /connect')
-        return
+        alert('Сессия не найдена. Вернитесь в бота и нажмите /connect заново.');
+        return;
       }
-      modal.open()
-    }
+
+      if (!tg?.sendData) {
+        alert('Эта страница должна быть открыта через Telegram бота.');
+        return;
+      }
+
+      try {
+        // Открываем модалку выбора кошелька
+        await modal.open();
+      } catch (e) {
+        alert('Ошибка открытия WalletConnect: ' + e.message);
+      }
+    };
+
+    // Подписываемся на события подключения
+    modal.subscribeProvider(async (state) => {
+      if (state.provider && state.address) {
+        try {
+          // Запрашиваем подпись сообщения с nonce
+          const signature = await state.provider.request({
+            method: 'personal_sign',
+            params: [`VibeGuard verification: ${NONCE}`, state.address]
+          });
+
+          // Отправляем результат в бота
+          tg.sendData(JSON.stringify({
+            address: state.address,
+            signature: signature
+          }));
+
+          document.getElementById('status').style.display = 'block';
+          document.getElementById('status').textContent = '✅ Подписано! Закрываем...';
+          setTimeout(() => tg.close(), 1000);
+        } catch (e) {
+          alert('Ошибка подписи: ' + e.message);
+        }
+      }
+    });
   </script>
-  
+
   <style>
     body { font-family: sans-serif; background: #0d0d1a; color: #e8e8f0; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; text-align: center; }
     .card { background: #16162a; border: 1px solid #2a2a4a; border-radius: 20px; padding: 24px; width: 100%; max-width: 320px; }
@@ -100,23 +117,25 @@
 <body>
   <div class="card">
     <h2 style="margin-top:0">🛡️ VibeGuard</h2>
-    <p class="muted">Подключите любой кошелёк через WalletConnect</p>
+    <p class="muted">Нажмите кнопку, чтобы подключить любой кошелёк</p>
     
     <button class="btn" onclick="connectWallet()">🔗 Подключить кошелёк</button>
     
     <div id="status">Обработка...</div>
   </div>
   
-  <p class="muted">Поддерживаются все популярные кошельки</p>
-  
+  <p class="muted">Поддерживаются все популярные кошельки (MetaMask, Trust, Coinbase, OKX и др.)</p>
+
   <script>
     // Проверка запуска внутри Telegram
-    const tg = window.Telegram?.WebApp
-    if (!tg || !tg.sendData) {
-      document.body.innerHTML = '<div class="card"><h2>🛡️ VibeGuard</h2><p class="muted">Откройте эту страницу через бота в Telegram</p></div>'
-    } else {
-      tg.expand()
-    }
+    (function() {
+      const tg = window.Telegram?.WebApp;
+      if (!tg || !tg.sendData) {
+        document.body.innerHTML = '<div class="card"><h2>🛡️ VibeGuard</h2><p class="muted">Откройте эту страницу через бота в Telegram: нажмите «Connect Wallet» в @VibeGuard_AI_bot</p></div>';
+      } else {
+        tg.expand();
+      }
+    })();
   </script>
 </body>
 </html>
