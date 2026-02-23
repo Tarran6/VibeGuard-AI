@@ -12,7 +12,7 @@
     import { createAppKit } from 'https://esm.sh/@reown/appkit@1.6.0';
     import { mainnet, bsc } from 'https://esm.sh/@reown/appkit/networks@1.6.0';
 
-    // Определяем сеть opBNB вручную (chainId 204)
+    // Ручное определение opBNB
     const opBNB = {
       id: 204,
       name: 'opBNB Mainnet',
@@ -41,14 +41,17 @@
 
     const tg = window.Telegram?.WebApp;
 
+    // Проверка запуска внутри Telegram
     if (!tg || !tg.sendData) {
       document.body.innerHTML = '<div class="card"><h2>🛡️ VibeGuard</h2><p class="muted">Откройте эту страницу через @VibeGuard_AI_bot</p></div>';
       throw new Error('Not in Telegram');
     }
 
     tg.expand();
+    console.log('Telegram WebApp инициализирован, версия:', tg.version);
 
     if (!NONCE) {
+      alert('Сессия не найдена. Вернитесь в бота и нажмите /connect заново.');
       document.querySelector('.muted').innerHTML = 'Сессия не найдена.<br>Нажмите /connect заново.';
     }
 
@@ -57,24 +60,32 @@
     }
 
     // Создаём модалку WalletConnect
-    const modal = createAppKit({
-      networks: [opBNB, bsc, mainnet],
-      projectId: PROJECT_ID || 'add9137cea1e48432cd4ba404f4a7443', // fallback
-      metadata: {
-        name: 'VibeGuard AI',
-        description: 'Безопасная Web3 авторизация',
-        url: 'https://vibe-guard-ai.vercel.app',
-        icons: ['https://vibe-guard-ai.vercel.app/favicon.ico']
-      },
-      themeMode: 'dark',
-      themeVariables: {
-        '--w3m-accent': '#6366f1'
-      }
-    });
+    let modal;
+    try {
+      modal = createAppKit({
+        networks: [opBNB, bsc, mainnet],
+        projectId: PROJECT_ID || 'add9137cea1e48432cd4ba404f4a7443', // запасной ID
+        metadata: {
+          name: 'VibeGuard AI',
+          description: 'Безопасная Web3 авторизация',
+          url: window.location.origin,
+          icons: ['https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png']
+        },
+        themeMode: 'dark',
+        themeVariables: {
+          '--w3m-accent': '#6366f1'
+        }
+      });
+      console.log('AppKit создан, проект ID:', PROJECT_ID || 'запасной');
+    } catch (e) {
+      console.error('Ошибка создания AppKit:', e);
+      alert('Ошибка инициализации WalletConnect: ' + e.message);
+    }
 
-    console.log('AppKit создан, проект ID:', PROJECT_ID);
-
+    // Функция подключения кошелька
     window.connectWallet = async () => {
+      console.log('connectWallet вызван, NONCE=', NONCE);
+
       if (!NONCE) {
         alert('Сессия не найдена. Вернитесь в бота и нажмите /connect заново.');
         return;
@@ -85,35 +96,38 @@
       status.textContent = 'Открываем модал кошельков...';
 
       try {
+        console.log('Открываем модалку WalletConnect');
         await modal.open();
 
-        // Подписываемся на событие CONNECT_SUCCESS
+        // Подписываемся на события
         modal.subscribeEvents(async (event) => {
+          console.log('Событие AppKit:', event);
           if (event.data.event === 'CONNECT_SUCCESS') {
-            // Небольшая задержка для стабильности
+            console.log('CONNECT_SUCCESS получен');
             setTimeout(async () => {
-              const address = modal.getAddress();
-              if (!address) {
-                console.error('Адрес не получен');
-                return;
-              }
-
-              // Пробуем получить провайдер
-              let provider = modal.getWalletProvider();
-              if (!provider && window.ethereum) {
-                provider = window.ethereum; // fallback
-              }
-
-              if (!provider) {
-                alert('Провайдер не найден. Попробуйте выбрать другой кошелёк.');
-                status.style.display = 'none';
-                return;
-              }
-
               try {
+                const address = modal.getAddress();
+                console.log('Адрес кошелька:', address);
+                if (!address) {
+                  throw new Error('Адрес не получен');
+                }
+
+                // Получаем провайдер
+                let provider = modal.getWalletProvider();
+                if (!provider && window.ethereum) {
+                  provider = window.ethereum;
+                  console.log('Используем window.ethereum как fallback');
+                }
+
+                if (!provider) {
+                  throw new Error('Провайдер не найден');
+                }
+
                 const ethersProvider = new ethers.BrowserProvider(provider);
                 const signer = await ethersProvider.getSigner();
+                console.log('Подписываем сообщение с nonce:', NONCE);
                 const signature = await signer.signMessage('VibeGuard verification: ' + NONCE);
+                console.log('Подпись получена:', signature);
 
                 tg.sendData(JSON.stringify({
                   address: address,
@@ -124,7 +138,7 @@
                 status.textContent = '✅ Подключено! Закрываем...';
                 setTimeout(() => tg.close(), 1500);
               } catch (e) {
-                console.error('Ошибка подписи:', e);
+                console.error('Ошибка в процессе подписи:', e);
                 alert('Ошибка подписи: ' + (e.message || e));
                 status.style.display = 'none';
               }
