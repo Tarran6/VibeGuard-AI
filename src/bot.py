@@ -1,10 +1,9 @@
 # =============================================================================
-#  VibeGuard Sentinel — src/bot.py (v24.3)
+#  VibeGuard Sentinel — src/bot.py (v24.4)
 #  Исправления:
-#    • При нажатии на кнопку "Подключить кошелёк" меню заменяется на WebApp-кнопку
-#    • Статистика, настройки и поддержка редактируют текущее сообщение (нет дублей)
-#    • Добавлены вспомогательные функции для текста
-#    • Убраны лишние проверки m.text is None
+#    • Убрано фото из /start – теперь только текст (для возможности редактирования)
+#    • Все callback-обработчики используют edit_message_text (без ошибок)
+#    • Версия обновлена до v24.4
 # =============================================================================
 
 import asyncio
@@ -912,7 +911,7 @@ async def get_status_text() -> str:
         total_w = sum(len(v) for v in db["connected_wallets"].values())
     bnb_price = _price_cache.get("BNB", 0.0)
     return (
-        f"🛡️ <b>VibeGuard Sentinel v24.3</b>\n\n"
+        f"🛡️ <b>VibeGuard Sentinel v24.4</b>\n\n"
         f"📊 <b>Статистика:</b>\n"
         f"Блоков:         <b>{s['blocks']:,}</b>\n"
         f"Последний блок: <b>{last_b:,}</b>\n"
@@ -965,10 +964,10 @@ def get_main_menu_keyboard():
 @bot.message_handler(commands=["start"])
 async def cmd_start(m: types.Message) -> None:
     clear_state(m.from_user.id)
-    await bot.send_photo(
-        m.chat.id, LOGO_URL,
-        caption=(
-            "🛡️ <b>VibeGuard Sentinel v24.3</b>\n\n"
+    await bot.send_message(
+        m.chat.id,
+        (
+            "🛡️ <b>VibeGuard Sentinel v24.4</b>\n\n"
             "Мониторинг китов и скам-контрактов на opBNB.\n\n"
             "Используй кнопки ниже для навигации."
         ),
@@ -1293,7 +1292,6 @@ async def cmd_status(m: types.Message) -> None:
 
 @bot.message_handler(commands=["limit"])
 async def cmd_limit(m: types.Message) -> None:
-    # Если команда вызвана без аргументов, показываем текущий лимит
     if m.text is None:
         text = await get_limit_text()
         await bot.reply_to(m, text)
@@ -1495,7 +1493,7 @@ async def main() -> None:
     await refresh_bnb_price()
 
     logger.info(
-        f"🚀 VibeGuard v24.3 ЗАПУЩЕН | "
+        f"🚀 VibeGuard v24.4 ЗАПУЩЕН | "
         f"limit=${db['cfg']['limit_usd']:,.0f} | "
         f"BNB=${_price_cache.get('BNB', 0):.2f} | "
         f"onchain={'ON' if ENABLE_ONCHAIN else 'OFF'}"
