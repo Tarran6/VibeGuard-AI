@@ -11,6 +11,8 @@
     import { createAppKit } from 'https://unpkg.com/@reown/appkit@1.6.0/dist/esm/index.js'
     import { mainnet, bsc } from 'https://unpkg.com/@reown/appkit/networks@1.6.0/dist/esm/index.js'
 
+    console.log('VibeGuard WebApp загружен');
+
     // Определяем сеть opBNB (chainId 204)
     const opBNB = {
       id: 204,
@@ -21,7 +23,7 @@
         decimals: 18
       },
       rpcUrls: {
-        default: { http: ['https://opbnb-rpc.publicnode.com'] } // публичный RPC, ключ не нужен
+        default: { http: ['https://opbnb-rpc.publicnode.com'] }
       },
       blockExplorers: {
         default: { name: 'opBNBScan', url: 'https://opbnbscan.com' }
@@ -34,13 +36,15 @@
 
     if (tg?.initDataUnsafe?.start_param) {
       NONCE = tg.initDataUnsafe.start_param;
+      console.log('Nonce получен из start_param:', NONCE);
     } else {
-      // Запасной вариант: берём из URL (на случай, если открыли напрямую)
+      // Запасной вариант: берём из URL
       const urlParams = new URLSearchParams(window.location.search);
       NONCE = urlParams.get('nonce') || '';
+      console.log('Nonce получен из URL:', NONCE);
     }
 
-    // Если nonce найден, очищаем URL от него (чтобы не светился)
+    // Если nonce найден, очищаем URL от него
     if (NONCE) {
       window.history.replaceState(null, '', window.location.pathname);
     }
@@ -56,11 +60,15 @@
         icons: ['https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png']
       },
       themeMode: 'dark',
-      allWallets: 'SHOW' // показывать все доступные кошельки
+      allWallets: 'SHOW'
     });
+
+    console.log('AppKit создан, projectId:', 'add9137cea1e48432cd4ba404f4a7443');
 
     // Функция для подключения кошелька
     window.connectWallet = async () => {
+      console.log('connectWallet вызван, NONCE=', NONCE);
+
       if (!NONCE) {
         alert('Сессия не найдена. Вернитесь в бота и нажмите /connect заново.');
         return;
@@ -72,22 +80,25 @@
       }
 
       try {
-        // Открываем модалку выбора кошелька
+        console.log('Открываем модалку WalletConnect');
         await modal.open();
       } catch (e) {
+        console.error('Ошибка открытия модалки:', e);
         alert('Ошибка открытия WalletConnect: ' + e.message);
       }
     };
 
     // Подписываемся на события подключения
     modal.subscribeProvider(async (state) => {
+      console.log('subscribeProvider: state=', state);
       if (state.provider && state.address) {
         try {
-          // Запрашиваем подпись сообщения с nonce
+          console.log('Запрашиваем подпись для адреса:', state.address);
           const signature = await state.provider.request({
             method: 'personal_sign',
             params: [`VibeGuard verification: ${NONCE}`, state.address]
           });
+          console.log('Подпись получена:', signature);
 
           // Отправляем результат в бота
           tg.sendData(JSON.stringify({
@@ -99,6 +110,7 @@
           document.getElementById('status').textContent = '✅ Подписано! Закрываем...';
           setTimeout(() => tg.close(), 1000);
         } catch (e) {
+          console.error('Ошибка подписи:', e);
           alert('Ошибка подписи: ' + e.message);
         }
       }
@@ -133,6 +145,7 @@
         document.body.innerHTML = '<div class="card"><h2>🛡️ VibeGuard</h2><p class="muted">Откройте эту страницу через бота в Telegram: нажмите «Connect Wallet» в @VibeGuard_AI_bot</p></div>';
       } else {
         tg.expand();
+        console.log('Telegram WebApp инициализирован, версия:', tg.version);
       }
     })();
   </script>
