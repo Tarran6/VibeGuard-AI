@@ -1115,45 +1115,6 @@ async def cb_disconnect(c: types.CallbackQuery) -> None:
     )
 
 
-@bot.callback_query_handler(func=lambda c: c.data == "connect_new")
-async def cb_connect_new(c: types.CallbackQuery) -> None:
-    await bot.answer_callback_query(c.id)
-    
-    uid = c.from_user.id
-    nonce = secrets.token_hex(16)
-    uid_str = str(uid)
-
-    async with db_lock:
-        db["pending_verifications"][uid_str] = {
-            "nonce": nonce,
-            "ts": time.time(),
-        }
-    await save_db()
-
-    webapp_url_with_nonce = f"{WEBAPP_URL}?nonce={nonce}" if WEBAPP_URL else ""
-
-    kb = types.InlineKeyboardMarkup()
-    if WEBAPP_URL:
-        kb.add(types.InlineKeyboardButton(
-            "🔗 Connect Wallet",
-            web_app=types.WebAppInfo(url=webapp_url_with_nonce),
-        ))
-    else:
-        kb.add(types.InlineKeyboardButton(
-            "⚠️ WebApp не настроен",
-            callback_data="webapp_not_configured",
-        ))
-
-    await bot.send_message(
-        c.message.chat.id,
-        "👛 <b>Подключение кошелька</b>\n\n"
-        "Нажми кнопку ниже, выбери кошелёк (MetaMask, Trust Wallet и др.) "
-        "и подтверди подпись одним тапом.\n\n"
-        "<i>Сессия действительна 10 минут.</i>",
-        reply_markup=kb,
-    )
-
-
 @bot.callback_query_handler(func=lambda c: c.data == "webapp_not_configured")
 async def cb_webapp_not_configured(c: types.CallbackQuery) -> None:
     await bot.answer_callback_query(
@@ -1211,7 +1172,6 @@ async def cmd_disconnect(m: types.Message) -> None:
             callback_data=f"dc:{uid}:{i}",
         ))
     kb.add(types.InlineKeyboardButton("Отмена", callback_data="dc:cancel"))
-    kb.add(types.InlineKeyboardButton("Подключить кошелек", callback_data="connect_new"))
     await bot.reply_to(m, "Выбери кошелёк для отключения:", reply_markup=kb)
 
 
