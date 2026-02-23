@@ -1,9 +1,9 @@
 # =============================================================================
-#  VibeGuard Sentinel — src/bot.py (v24.2)
-#  Исправления:
-#    • Добавлена проверка m.text is None во всех хендлерах команд
-#    • Улучшена обработка ошибок в WebApp
-#    • Добавлено логирование для отладки подключения кошелька
+#  VibeGuard Sentinel — src/bot.py (v24.2.1)
+#  Исправления по ТЗ:
+#    • Удалены блокировки "if m.text is None" в командах для поддержки Inline
+#    • Полная замена функции cmd_limit (обработка callback + текст)
+#    • Упрощен caption в cmd_start (удален список команд)
 # =============================================================================
 
 import asyncio
@@ -78,7 +78,7 @@ REOWN_PROJECT_ID = _optional("REOWN_PROJECT_ID", "")
 
 LOGO_URL = _optional(
     "LOGO_URL",
-    "https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png"
+    "https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/logo.png"
 )
 
 OWNERS: set[int] = {PRIMARY_OWNER_ID}
@@ -368,7 +368,7 @@ _SCAN_ABI = [{
         {"name": "_contract", "type": "address"},
         {"name": "_score",    "type": "uint256"},
         {"name": "_isSafe",   "type": "bool"},
-        {"name": "_user",     "type": "address"},
+        {"name": "_user",      "type": "address"},
     ],
     "name": "logScan",
     "outputs": [],
@@ -418,7 +418,7 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
 async def call_ai(prompt: str) -> str:
     configs = (
         [("xai",    k) for k in XAI_KEYS]  +
-        [("groq",   k) for k in GROQ_KEYS] +
+        [("groq",    k) for k in GROQ_KEYS] +
         [("gemini", k) for k in GEMINI_KEYS]
     )
     if not configs:
@@ -554,7 +554,7 @@ def _is_connected_wallet(address: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# ОБРАБОТКА BNB-ТРАНЗАКЦИЙ (без изменений из вашего исходного файла)
+# ОБРАБОТКА BNB-ТРАНЗАКЦИЙ
 # ---------------------------------------------------------------------------
 
 async def process_bnb_tx(tx: dict) -> None:
@@ -634,7 +634,7 @@ async def process_bnb_tx(tx: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ОБРАБОТКА ERC-20 TRANSFER ЛОГОВ (без изменений)
+# ОБРАБОТКА ERC-20 TRANSFER ЛОГОВ
 # ---------------------------------------------------------------------------
 
 async def process_erc20_log(log: dict) -> None:
@@ -836,7 +836,7 @@ async def monitor() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ВЕРИФИКАЦИЯ КОШЕЛЬКА (вызывается из WebApp)
+# ВЕРИФИКАЦИЯ КОШЕЛЬКА
 # ---------------------------------------------------------------------------
 
 async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[bool, str]:
@@ -862,7 +862,7 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
     try:
         w3_local    = Web3()
         msg_defunct = encode_defunct(text=message)
-        recovered   = w3_local.eth.account.recover_message(
+        recovered    = w3_local.eth.account.recover_message(
             msg_defunct, signature=signature
         )
     except Exception as e:
@@ -895,7 +895,7 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
 
 
 # ---------------------------------------------------------------------------
-# НОВАЯ ИНЛАЙН-КЛАВИАТУРА ГЛАВНОГО МЕНЮ
+# КЛАВИАТУРА
 # ---------------------------------------------------------------------------
 
 def get_main_menu_keyboard():
@@ -923,13 +923,7 @@ async def cmd_start(m: types.Message) -> None:
         caption=(
             "🛡️ <b>VibeGuard Sentinel v24.2</b>\n\n"
             "Мониторинг китов и скам-контрактов на opBNB.\n\n"
-            "<b>Основные команды:</b>\n"
-            "/connect — подключить кошелёк\n"
-            "/mywallets — мои кошельки\n"
-            "/disconnect — отвязать кошелёк\n"
-            "/check 0x... — проверить контракт\n"
-            "/limit — порог уведомлений\n"
-            "/status — статистика бота"
+            "Используй кнопки ниже для навигации."
         ),
         reply_markup=get_main_menu_keyboard(),
     )
@@ -937,10 +931,6 @@ async def cmd_start(m: types.Message) -> None:
 
 @bot.message_handler(commands=["connect"])
 async def cmd_connect(m: types.Message) -> None:
-    # Защита от None текста (хотя у команды он должен быть)
-    if m.text is None:
-        return
-
     uid = m.from_user.id
     nonce = secrets.token_hex(16)
 
@@ -951,7 +941,6 @@ async def cmd_connect(m: types.Message) -> None:
         }
     await save_db()
 
-    # Формируем URL с параметром startapp=nonce
     webapp_url = f"{WEBAPP_URL}?startapp={nonce}"
 
     kb = types.InlineKeyboardMarkup()
@@ -1094,8 +1083,6 @@ async def cb_connect_new(c: types.CallbackQuery) -> None:
 
 @bot.message_handler(commands=["mywallets"])
 async def cmd_mywallets(m: types.Message) -> None:
-    if m.text is None:
-        return
     uid = m.from_user.id
     async with db_lock:
         wallets = list(db["connected_wallets"].get(str(uid), []))
@@ -1131,7 +1118,7 @@ async def cmd_mywallets(m: types.Message) -> None:
 
     await bot.reply_to(
         m,
-        f"👛 <b>Твои кошельки ({len(wallets)}/5):</b>\n\n"
+        "👛 <b>Твои кошельки (" + str(len(wallets)) + "/5):</b>\n\n"
         f"{lines}\n\n"
         f"🔔 Алерты при любом движении.\n"
         f"🐳 Глобальный лимит китов: <b>${limit:,.0f}</b>",
@@ -1141,8 +1128,6 @@ async def cmd_mywallets(m: types.Message) -> None:
 
 @bot.message_handler(commands=["disconnect"])
 async def cmd_disconnect(m: types.Message) -> None:
-    if m.text is None:
-        return
     uid = m.from_user.id
     async with db_lock:
         wallets = list(db["connected_wallets"].get(str(uid), []))
@@ -1164,9 +1149,7 @@ async def cmd_disconnect(m: types.Message) -> None:
 
 @bot.message_handler(commands=["check"])
 async def cmd_check(m: types.Message) -> None:
-    if m.text is None:
-        return
-    args = m.text.split()
+    args = m.text.split() if m.text else []
     if len(args) < 2:
         await bot.reply_to(m, "Пример: /check 0xКОНТРАКТ")
         return
@@ -1208,8 +1191,6 @@ async def cmd_check(m: types.Message) -> None:
 
 @bot.message_handler(commands=["status", "stats"])
 async def cmd_status(m: types.Message) -> None:
-    if m.text is None:
-        return
     uptime  = time.time() - start_time
     hours   = int(uptime // 3600)
     minutes = int((uptime % 3600) // 60)
@@ -1246,7 +1227,16 @@ async def cmd_status(m: types.Message) -> None:
 
 @bot.message_handler(commands=["limit"])
 async def cmd_limit(m: types.Message) -> None:
+    # Если сообщение не содержит текст (вызвано из callback'а), показываем текущий лимит
     if m.text is None:
+        async with db_lock:
+            cur = db["cfg"]["limit_usd"]
+        await bot.reply_to(
+            m,
+            f"Лимит уведомлений о китах: <b>${cur:,.0f}</b>\n"
+            f"Алерты о подключённых кошельках — при любых суммах.\n\n"
+            f"Изменить (владелец): /limit 100 … /limit 1000000",
+        )
         return
     args = m.text.split()
     if len(args) > 1:
@@ -1281,10 +1271,8 @@ async def cmd_limit(m: types.Message) -> None:
 
 @bot.message_handler(commands=["watch"])
 async def cmd_watch(m: types.Message) -> None:
-    if m.text is None:
-        return
     if not is_owner(m.from_user.id): return
-    args = m.text.split()
+    args = m.text.split() if m.text else []
     if len(args) < 2:
         await bot.reply_to(m, "Пример: /watch 0xADDRESS"); return
     addr = args[1].lower()
@@ -1299,10 +1287,8 @@ async def cmd_watch(m: types.Message) -> None:
 
 @bot.message_handler(commands=["unwatch"])
 async def cmd_unwatch(m: types.Message) -> None:
-    if m.text is None:
-        return
     if not is_owner(m.from_user.id): return
-    args = m.text.split()
+    args = m.text.split() if m.text else []
     if len(args) < 2:
         await bot.reply_to(m, "Пример: /unwatch 0xADDRESS"); return
     addr = args[1].lower()
@@ -1318,10 +1304,8 @@ async def cmd_unwatch(m: types.Message) -> None:
 
 @bot.message_handler(commands=["ignore"])
 async def cmd_ignore(m: types.Message) -> None:
-    if m.text is None:
-        return
     if not is_owner(m.from_user.id): return
-    args = m.text.split()
+    args = m.text.split() if m.text else []
     if len(args) < 2:
         await bot.reply_to(m, "Пример: /ignore 0xADDRESS"); return
     addr = args[1].lower()
@@ -1336,10 +1320,8 @@ async def cmd_ignore(m: types.Message) -> None:
 
 @bot.message_handler(commands=["unignore"])
 async def cmd_unignore(m: types.Message) -> None:
-    if m.text is None:
-        return
     if not is_owner(m.from_user.id): return
-    args = m.text.split()
+    args = m.text.split() if m.text else []
     if len(args) < 2:
         await bot.reply_to(m, "Пример: /unignore 0xADDRESS"); return
     addr = args[1].lower()
@@ -1361,8 +1343,6 @@ async def cmd_cancel(m: types.Message) -> None:
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id) == "ask_ai")
 async def handle_ask_ai(m: types.Message) -> None:
-    if m.text is None:
-        return
     clear_state(m.from_user.id)
     wait = await bot.reply_to(m, "⏳ AI думает...")
     async with ai_sem:
@@ -1379,11 +1359,10 @@ async def handle_ask_ai(m: types.Message) -> None:
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id) == "check_contract")
 async def handle_check_state(m: types.Message) -> None:
-    if m.text is None:
-        return
     clear_state(m.from_user.id)
-    m.text = f"/check {m.text.strip()}"
-    await cmd_check(m)
+    if m.text:
+        m.text = f"/check {m.text.strip()}"
+        await cmd_check(m)
 
 
 # ---------------------------------------------------------------------------
@@ -1448,7 +1427,6 @@ async def main() -> None:
     await init_db()
     logger.info("✅ PostgreSQL подключена")
 
-    # Проверка chainId
     try:
         chain_data = await rpc({"jsonrpc": "2.0", "method": "eth_chainId", "id": 1})
         chain_id = int(chain_data.get("result", "0x0"), 16)
