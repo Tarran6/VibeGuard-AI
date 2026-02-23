@@ -37,16 +37,20 @@
       themeMode: 'dark'
     });
 
+    let isProcessing = false;
+
     async function signMessage() {
+      if (isProcessing) return;
+      isProcessing = true;
+      
       const status = document.getElementById('status');
       try {
-        status.textContent = '✍️ Запрашиваем подпись в кошельке...';
+        status.textContent = '✍️ Подпишите сообщение в кошельке...';
         
-        // Ждем немного, чтобы кошелек успел инициализироваться
         await new Promise(r => setTimeout(r, 1000));
-        
         let provider = modal.getWalletProvider() || modal.getState()?.provider;
-        if (!provider) throw new Error('Кошелек не предоставил доступ. Попробуйте еще раз.');
+        
+        if (!provider) throw new Error('Кошелек не предоставил доступ. Переподключитесь.');
 
         const ethersProvider = new ethers.BrowserProvider(provider);
         const signer = await ethersProvider.getSigner();
@@ -55,18 +59,19 @@
         const message = `VibeGuard verification: ${NONCE}`;
         const signature = await signer.signMessage(message);
 
-        // ОТПРАВЛЯЕМ ПОЛНЫЙ ПАКЕТ ДАННЫХ
+        // Отправляем nonce вместе с подписью
         tg.sendData(JSON.stringify({
           address: address,
           signature: signature,
           nonce: NONCE 
         }));
 
-        status.textContent = '✅ Готово! Возвращаемся...';
-        setTimeout(() => tg.close(), 1000);
+        status.textContent = '✅ Успешно! Возвращаемся...';
+        setTimeout(() => tg.close(), 1200);
 
       } catch (err) {
         status.textContent = '❌ ' + err.message;
+        isProcessing = false;
         console.error(err);
       }
     }
@@ -75,18 +80,17 @@
       const status = document.getElementById('status');
       status.style.display = 'block';
       
-      const account = modal.getAccount();
+      const state = modal.getState();
       
-      // Если уже законнекчены (для OKX это важно)
-      if (account && account.isConnected) {
+      if (state?.address && state?.isConnected) {
         await signMessage();
       } else {
-        status.textContent = '💎 Открываем список кошельков...';
+        status.textContent = '💎 Выберите кошелек из списка...';
         await modal.open();
         
-        // Подписываемся на изменения аккаунта
-        modal.subscribeAccount(async (state) => {
-          if (state.isConnected && state.address) {
+        const unsubscribe = modal.subscribeAccount(async (newState) => {
+          if (newState.isConnected && newState.address && !isProcessing) {
+            unsubscribe();
             await signMessage();
           }
         });
@@ -96,15 +100,16 @@
   <style>
     body { font-family: sans-serif; background: #0a0a0c; color: white; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
     .container { background: #121216; border-radius: 24px; padding: 32px; width: 90%; max-width: 340px; text-align: center; border: 1px solid #26262c; }
-    .btn-main { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; border: none; border-radius: 16px; padding: 18px; width: 100%; font-size: 16px; font-weight: 700; cursor: pointer; }
-    #status { margin-top: 20px; color: #6366f1; display: none; font-weight: 500; }
+    .btn-main { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; border: none; border-radius: 16px; padding: 18px; width: 100%; font-size: 16px; font-weight: 700; cursor: pointer; transition: 0.2s; }
+    .btn-main:active { transform: scale(0.98); }
+    #status { margin-top: 20px; color: #6366f1; display: none; font-size: 14px; }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="logo" style="font-size: 50px; margin-bottom: 10px;">🛡️</div>
+    <div style="font-size: 50px; margin-bottom: 10px;">🛡️</div>
     <h2>VibeGuard AI</h2>
-    <p style="color: #8e8e93; font-size: 14px; margin-bottom: 25px;">Подключите MetaMask или OKX для верификации</p>
+    <p style="color: #8e8e93; font-size: 14px; margin-bottom: 25px;">Авторизуйтесь через MetaMask или OKX</p>
     <button class="btn-main" onclick="connectWallet()">🚀 Подключить кошелёк</button>
     <div id="status">Загрузка...</div>
   </div>
