@@ -66,6 +66,11 @@ GEMINI_KEYS = [k for k in _optional("GEMINI_API_KEY").split(",") if k.strip()]
 GROQ_KEYS   = [k for k in _optional("GROQ_API_KEY").split(",") if k.strip()]
 XAI_KEYS    = [k for k in _optional("XAI_API_KEY").split(",")    if k.strip()]
 
+# AI модели (можно переопределить через env)
+XAI_MODEL = _optional("XAI_MODEL", "grok-2-latest")
+GROQ_MODEL = _optional("GROQ_MODEL", "llama-3.1-70b-versatile")
+GEMINI_MODEL = _optional("GEMINI_MODEL", "gemini-2.0-flash-exp")
+
 GOPLUS_APP_KEY    = _optional("GOPLUS_APP_KEY")
 GOPLUS_APP_SECRET = _optional("GOPLUS_APP_SECRET")
 
@@ -73,8 +78,10 @@ ENABLE_ONCHAIN    = _optional("ENABLE_ONCHAIN_LOG") == "true"
 ONCHAIN_PRIVKEY   = _optional("WEB3_PRIVATE_KEY")
 ONCHAIN_CONTRACT  = _optional("VIBEGUARD_CONTRACT")
 
+# URL веб-приложения (Telegram WebApp для Connect Wallet)
 WEBAPP_URL = _optional("WEBAPP_URL", "")
 REOWN_PROJECT_ID = _optional("REOWN_PROJECT_ID", "")
+BOT_PUBLIC_URL = _optional("BOT_PUBLIC_URL", "")
 
 LOGO_URL = _optional(
     "LOGO_URL",
@@ -443,20 +450,20 @@ async def _ai_request(provider: str, key: str, prompt: str) -> Optional[str]:
         url     = "https://api.x.ai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {key}"}
         payload = {
-            "model": "grok-2-latest",
+            "model": XAI_MODEL,
             "messages": [{"role": "user", "content": prompt}],
         }
     elif provider == "groq":
         url     = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {key}"}
         payload = {
-            "model": "llama-3.3-70b-versatile",
+            "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
         }
     else:  # gemini
         url     = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.0-flash:generateContent?key={key}"
+            f"{GEMINI_MODEL}:generateContent?key={key}"
         )
         headers = {}
         payload = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -467,19 +474,17 @@ async def _ai_request(provider: str, key: str, prompt: str) -> Optional[str]:
         if r.status == 429:
             raise RuntimeError("Rate limit 429")
         if r.status != 200:
-            raise RuntimeError(f"HTTP {r.status}")
+            txt = await r.text()
+            raise RuntimeError(f"HTTP {r.status}: {txt[:200]}")
         data = await r.json()
 
     if provider == "gemini":
-        try:
-            candidates = data.get("candidates") or []
-            if candidates and isinstance(candidates[0], dict):
-                content = candidates[0].get("content") or {}
-                parts = content.get("parts") or []
-                if parts and isinstance(parts[0], dict) and "text" in parts[0]:
-                    return parts[0]["text"]
-        except Exception:
-            pass
+        candidates = data.get("candidates") or []
+        if candidates and isinstance(candidates[0], dict):
+            content = candidates[0].get("content") or {}
+            parts = content.get("parts") or []
+            if parts and isinstance(parts[0], dict) and "text" in parts[0]:
+                return parts[0]["text"]
         raise RuntimeError("Gemini: неверный формат ответа")
     return data.get("choices", [{}])[0].get("message", {}).get("content") or ""
 
@@ -627,6 +632,7 @@ async def process_bnb_tx(tx: dict) -> None:
 
         score   = 25 if risks else 85
         is_safe = not bool(risks)
+        await notify_owners(f"🛡️ <b>VibeScore: {score}/100</b> ({'Безопасно' if is_safe else 'Риск'})")
         asyncio.create_task(log_onchain(target, score, is_safe))
 
     except Exception as e:
@@ -712,8 +718,11 @@ async def process_erc20_log(log: dict) -> None:
                 f"Риски: {esc(', '.join(risks))}"
             )
 
+        score = 25 if risks else 85
+        is_safe = not bool(risks)
+        await notify_owners(f"🛡️ <b>VibeScore: {score}/100</b> ({'Безопасно' if is_safe else 'Риск'})")
         asyncio.create_task(
-            log_onchain(token_addr, 25 if risks else 85, not bool(risks))
+            log_onchain(token_addr, score, is_safe)
         )
 
     except Exception as e:
@@ -1081,7 +1090,10 @@ async def handle_menu_callback(c: types.CallbackQuery):
                 "ts": time.time(),
             }
         await save_db()
-        webapp_url = f"{WEBAPP_URL}?startapp={nonce}&wc_project_id={REOWN_PROJECT_ID}"
+        parts = [f"startapp={nonce}", f"wc_project_id={REOWN_PROJECT_ID}"]
+        if BOT_PUBLIC_URL:
+            parts.append(f"api={BOT_PUBLIC_URL}/webapp/connect")
+        webapp_url = f"{WEBAPP_URL}?{'&'.join(parts)}"
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton(
             "🔗 Connect Wallet",
@@ -1263,6 +1275,9 @@ async def cmd_check(m: types.Message) -> None:
     wait = await bot.reply_to(m, "🔍 Проверяю контракт...")
     risks = await check_scam(addr)
 
+    score = 25 if risks else 85
+    is_safe = not bool(risks)
+
     if risks:
         icon, status = "🚨", f"Риски: {', '.join(risks)}"
         prompt = (
@@ -1282,6 +1297,7 @@ async def cmd_check(m: types.Message) -> None:
     result_text = (
         f"{icon} <b>Проверка контракта</b>\n"
         f"<code>{esc(addr)}</code>\n\n"
+        f"🛡️ <b>VibeScore: {score}/100</b> ({'Безопасно' if is_safe else 'Риск'})\n"
         f"<b>Статус:</b> {esc(status)}\n\n"
         f"🧠 <b>AI:</b> {verdict}"
     )
@@ -1451,6 +1467,83 @@ async def graceful_shutdown(sig_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# HEALTH SERVER (POST /webapp/connect)
+# ---------------------------------------------------------------------------
+
+async def _run_health_server() -> None:
+    from aiohttp import web
+    port = int(os.getenv("PORT", "8080"))
+    cors_headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Max-Age": "86400",
+    }
+
+    async def handle(_):
+        return web.Response(text="ok", headers=cors_headers)
+
+    async def handle_webapp_connect(request):
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
+
+        nonce = str(payload.get("nonce", "")).strip()
+        address = str(payload.get("address", "")).strip()
+        signature = str(payload.get("signature", "")).strip()
+
+        if not nonce or not address or not signature:
+            return web.json_response({"ok": False, "error": "missing fields"}, status=400, headers=cors_headers)
+
+        uid: Optional[int] = None
+        async with db_lock:
+            for uid_str, p in db.get("pending_verifications", {}).items():
+                if str(p.get("nonce", "")) == nonce:
+                    try:
+                        uid = int(uid_str)
+                    except Exception:
+                        uid = None
+                    break
+
+        if uid is None:
+            return web.json_response({"ok": False, "error": "session not found"}, status=404, headers=cors_headers)
+
+        success, message = await verify_wallet(uid, address, signature)
+        if success:
+            await safe_send(
+                uid,
+                f"✅ <b>Кошелёк подключён!</b>\n"
+                f"<code>{esc(address.lower())}</code>\n\n"
+                f"Теперь ты получаешь личные алерты о всех транзакциях "
+                f"этого адреса.",
+            )
+            return web.json_response({"ok": True}, headers=cors_headers)
+
+        return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
+
+    async def handle_webapp_connect_options(_):
+        return web.Response(status=204, headers=cors_headers)
+
+    app = web.Application()
+    app.router.add_get("/", handle)
+    app.router.add_options("/webapp/connect", handle_webapp_connect_options)
+    app.router.add_post("/webapp/connect", handle_webapp_connect)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+    logger.info("✅ Health server listening on 0.0.0.0:%d", port)
+
+    try:
+        while not _shutdown:
+            await asyncio.sleep(1)
+    finally:
+        await runner.cleanup()
+        logger.info("✅ Health server stopped")
+
+
+# ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
 
@@ -1480,13 +1573,17 @@ async def main() -> None:
             if attempt < 2:
                 await asyncio.sleep(3)
 
+    # HTTP сессия
     connector    = aiohttp.TCPConnector(limit=50, ttl_dns_cache=300)
     http_session = aiohttp.ClientSession(connector=connector)
 
+    # Health сервер для /webapp/connect
+    health_task = asyncio.create_task(_run_health_server())
+
+    # БД
     await init_db()
     logger.info("✅ PostgreSQL подключена")
 
-    # Проверка chainId
     try:
         chain_data = await rpc({"jsonrpc": "2.0", "method": "eth_chainId", "id": 1})
         chain_id = int(chain_data.get("result", "0x0"), 16)
@@ -1513,12 +1610,13 @@ async def main() -> None:
     tx_workers   = [asyncio.create_task(tx_worker(i))  for i in range(6)]
     log_workers  = [asyncio.create_task(log_worker(i)) for i in range(4)]
 
-    _main_tasks.extend([polling_task, monitor_task])
+    _main_tasks.extend([polling_task, monitor_task, health_task])
 
     try:
         await asyncio.gather(
             polling_task,
             monitor_task,
+            health_task,
             *tx_workers,
             *log_workers,
             return_exceptions=True,
