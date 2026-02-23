@@ -1035,22 +1035,27 @@ async def cmd_connect(m: types.Message) -> None:
 @bot.message_handler(content_types=["web_app_data"])
 async def handle_webapp_data(m: types.Message) -> None:
     uid = m.from_user.id
+    logger.info(f"📩 Получены web_app_data от пользователя {uid}")
+    
     try:
-        data    = json.loads(m.web_app_data.data)
+        data = json.loads(m.web_app_data.data)
         address = data.get("address", "").strip()
-        sig     = data.get("signature", "").strip()
+        sig = data.get("signature", "").strip()
+        logger.info(f"📦 Данные: address={address[:10]}..., signature={sig[:20]}...")
     except Exception as e:
         logger.warning(f"webapp_data parse error uid={uid}: {e}")
         await safe_send(uid, "❌ Ошибка данных от WebApp. Попробуй ещё раз.")
         return
 
     if not address or not sig:
+        logger.warning(f"Неполные данные от {uid}")
         await safe_send(uid, "❌ Неполные данные от WebApp.")
         return
 
     success, message = await verify_wallet(uid, address, sig)
 
     if success:
+        logger.info(f"✅ Кошелёк {address[:10]}... успешно подключён пользователем {uid}")
         await safe_send(
             uid,
             f"✅ <b>Кошелёк подключён!</b>\n"
@@ -1059,6 +1064,7 @@ async def handle_webapp_data(m: types.Message) -> None:
             f"этого адреса.",
         )
     else:
+        logger.warning(f"❌ Ошибка верификации для {uid}: {message}")
         await safe_send(uid, f"❌ {esc(message)}")
 
 
