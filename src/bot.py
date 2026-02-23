@@ -115,6 +115,8 @@ _DB_DEFAULT: dict = {
 }
 
 db: dict = {}
+# ОПТИМИЗАЦИЯ: Быстрый поиск юзера по nonce за O(1)
+_pending_by_nonce: dict[str, int] = {}
 
 # ---------------------------------------------------------------------------
 # ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
@@ -202,7 +204,13 @@ async def init_db() -> None:
                 db["cfg"]["limit_usd"] = LIMIT_MIN_USD
             db.setdefault("connected_wallets", {})
             db.setdefault("pending_verifications", {})
-            logger.info("✅ БД загружена")
+            
+            # НАПОЛНЕНИЕ ИНДЕКСА ПРИ СТАРТЕ
+            for uid_str, p in db["pending_verifications"].items():
+                if time.time() - p.get("ts", 0) < STATE_TTL:
+                    _pending_by_nonce[p["nonce"]] = int(uid_str)
+            
+            logger.info(f"✅ БД загружена. Активных сессий в индексе: {len(_pending_by_nonce)}")
         else:
             import copy
             db = copy.deepcopy(_DB_DEFAULT)
@@ -1003,6 +1011,7 @@ async def cmd_connect(m: types.Message) -> None:
             "ts": time.time(),
         }
     await save_db()
+    _pending_by_nonce[nonce] = uid
 
     # Формируем URL с параметрами startapp и wc_project_id
     parts = [f"startapp={nonce}", f"wc_project_id={REOWN_PROJECT_ID}"]
@@ -1539,26 +1548,39 @@ async def _run_health_server() -> None:
 
         return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
 
-    async def handle_webapp_connect_options(_):
-        return web.Response(status=204, headers=cors_headers)
+   async def handle_webapp_connect(request):
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
 
-    app = web.Application()
-    app.router.add_get("/", handle)
-    app.router.add_options("/webapp/connect", handle_webapp_connect_options)
-    app.router.add_post("/webapp/connect", handle_webapp_connect)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=port)
-    await site.start()
-    logger.info("✅ Health server listening on 0.0.0.0:%d", port)
+        nonce = str(payload.get("nonce", "")).strip()
+        address = str(payload.get("address", "")).strip()
+        signature = str(payload.get("signature", "")).strip()
 
-    try:
-        while not _shutdown:
-            await asyncio.sleep(1)
-    finally:
-        await runner.cleanup()
-        logger.info("✅ Health server stopped")
+        if not nonce or not address or not signature:
+            return web.json_response({"ok": False, "error": "missing fields"}, status=400, headers=cors_headers)
 
+        # ОПТИМИЗАЦИЯ O(1): Ищем юзера мгновенно по nonce из нашего словаря
+        uid = _pending_by_nonce.get(nonce)
+
+        if uid is None:
+            # Если в индексе нет, на всякий случай проверяем старым методом (медленным)
+            async with db_lock:
+                for uid_str, p in db.get("pending_verifications", {}).items():
+                    if str(p.get("nonce", "")) == nonce:
+                        uid = int(uid_str)
+                        break
+        
+        if uid is None:
+            return web.json_response({"ok": False, "error": "session not found"}, status=404, headers=cors_headers)
+
+        success, message = await verify_wallet(uid, address, signature)
+        if success:
+            _pending_by_nonce.pop(nonce, None) # Удаляем использованный nonce
+            return web.json_response({"ok": True}, headers=cors_headers)
+
+        return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
 
 # ---------------------------------------------------------------------------
 # MAIN
