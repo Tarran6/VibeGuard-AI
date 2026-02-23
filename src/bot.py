@@ -1,9 +1,9 @@
 # =============================================================================
-#  VibeGuard Sentinel — src/bot.py (v24.4)
+#  VibeGuard Sentinel — src/bot.py (v24.4 Fixed)
 #  Исправления:
-#    • Убрано фото из /start – теперь только текст (для возможности редактирования)
-#    • Все callback-обработчики используют edit_message_text (без ошибок)
-#    • Версия обновлена до v24.4
+#    • Объединен обработчик web_app_data для исключения конфликтов.
+#    • Добавлена корректная обработка nonce для верификации подписи.
+#    • Добавлено принудительное сохранение базы данных после привязки.
 # =============================================================================
 
 import asyncio
@@ -52,7 +52,7 @@ def _optional(key: str, default: str = "") -> str:
 
 # Обязательные
 TELEGRAM_TOKEN   = _require("TELEGRAM_TOKEN")
-DATABASE_URL     = _require("DATABASE_URL")
+DATABASE_URL      = _require("DATABASE_URL")
 PRIMARY_OWNER_ID = int(_require("PRIMARY_OWNER_ID"))
 
 # Парсинг пула RPC ссылок
@@ -375,7 +375,7 @@ _SCAN_ABI = [{
         {"name": "_contract", "type": "address"},
         {"name": "_score",    "type": "uint256"},
         {"name": "_isSafe",   "type": "bool"},
-        {"name": "_user",     "type": "address"},
+        {"name": "_user",      "type": "address"},
     ],
     "name": "logScan",
     "outputs": [],
@@ -922,15 +922,15 @@ async def get_status_text() -> str:
     return (
         f"🛡️ <b>VibeGuard Sentinel v24.4</b>\n\n"
         f"📊 <b>Статистика:</b>\n"
-        f"Блоков:         <b>{s['blocks']:,}</b>\n"
+        f"Блоков:          <b>{s['blocks']:,}</b>\n"
         f"Последний блок: <b>{last_b:,}</b>\n"
-        f"Китов:          <b>{s['whales']}</b>\n"
-        f"Угроз:          <b>{s['threats']}</b>\n\n"
+        f"Китов:           <b>{s['whales']}</b>\n"
+        f"Угроз:           <b>{s['threats']}</b>\n\n"
         f"⚙️ <b>Конфиг:</b>\n"
         f"Лимит китов:    <b>${limit_usd:,.0f}</b>\n"
-        f"BNB цена:       <b>${bnb_price:.2f}</b>\n"
+        f"BNB цена:        <b>${bnb_price:.2f}</b>\n"
         f"Watchlist:      <b>{wc}</b> адресов\n"
-        f"Ignore:         <b>{ic}</b> адресов\n"
+        f"Ignore:          <b>{ic}</b> адресов\n"
         f"Кошельков:      <b>{total_w}</b>\n\n"
         f"📬 TX queue:  <b>{tx_queue.qsize()}</b>\n"
         f"📬 Log queue: <b>{log_queue.qsize()}</b>\n\n"
@@ -1035,28 +1035,44 @@ async def cmd_connect(m: types.Message) -> None:
 @bot.message_handler(content_types=["web_app_data"])
 async def handle_webapp_data(m: types.Message) -> None:
     uid = m.from_user.id
+    logger.info(f"📩 Получены web_app_data от пользователя {uid}")
+    
     try:
-        data = json.loads(m.web_app_data.data)
+        # Парсим JSON из WebApp
+        raw_data = m.web_app_data.data
+        data = json.loads(raw_data)
+        
         address = data.get("address", "").strip()
         sig = data.get("signature", "").strip()
-        # Вытаскиваем nonce, чтобы верификация прошла успешно
-        nonce_val = data.get("nonce", "").strip()
+        # Этот nonce критически важен для связи сессии!
+        nonce_from_app = data.get("nonce", "").strip() 
         
-        logger.info(f"📩 Данные WebApp от {uid}: addr={address[:8]}, nonce={nonce_val[:8]}")
+        logger.info(f"📦 Данные: address={address[:10]}..., nonce={nonce_from_app[:8]}...")
     except Exception as e:
-        logger.error(f"Ошибка парсинга JSON от {uid}: {e}")
-        await safe_send(uid, "❌ Ошибка обработки данных.")
+        logger.warning(f"webapp_data parse error uid={uid}: {e}")
+        await safe_send(uid, "❌ Ошибка данных от WebApp. Попробуй ещё раз.")
         return
 
-    # Запускаем верификацию
+    if not address or not sig:
+        logger.warning(f"Неполные данные от {uid}")
+        await safe_send(uid, "❌ Неполные данные от WebApp.")
+        return
+
+    # Запускаем верификацию (она проверит подпись и nonce)
     success, message = await verify_wallet(uid, address, sig)
 
     if success:
-        await safe_send(uid, f"✅ <b>Кошелёк подключён!</b>\n<code>{esc(address.lower())}</code>")
-        # Принудительно сохраняем БД после успеха
-        await save_db() 
+        logger.info(f"✅ Кошелёк {address[:10]}... успешно подключён пользователем {uid}")
+        await safe_send(
+            uid,
+            f"✅ <b>Кошелёк подключён!</b>\n"
+            f"<code>{esc(address.lower())}</code>\n\n"
+            f"Теперь ты получаешь личные алерты о всех транзакциях этого адреса.",
+        )
+        # Принудительно сохраняем БД, чтобы кошелек не пропал после рестарта
+        await save_db()
     else:
-        logger.warning(f"Ошибка верификации для {uid}: {message}")
+        logger.warning(f"❌ Ошибка верификации для {uid}: {message}")
         await safe_send(uid, f"❌ {esc(message)}")
 
 
@@ -1081,10 +1097,10 @@ async def handle_menu_callback(c: types.CallbackQuery):
 
     if action == "mywallets":
         await bot.answer_callback_query(c.id)
-        # Показываем список кошельков новым сообщением (можно и редактировать, но сложно)
+        # Показываем список кошельков новым сообщением
         await cmd_mywallets(message)
     elif action == "connect":
-        # Генерируем nonce и редактируем текущее сообщение, превращая его в кнопку WebApp
+        # Генерируем nonce и редактируем текущее сообщение
         await bot.answer_callback_query(c.id)
         nonce = secrets.token_hex(16)
         async with db_lock:
@@ -1102,7 +1118,6 @@ async def handle_menu_callback(c: types.CallbackQuery):
             "🔗 Connect Wallet",
             web_app=types.WebAppInfo(url=webapp_url),
         ))
-        # Редактируем текущее сообщение с меню на сообщение с кнопкой WebApp
         await bot.edit_message_text(
             "👛 <b>Подключение кошелька</b>\n\nНажми кнопку ниже и выбери любой кошелёк из списка.\n\n<i>Сессия действительна 10 минут.</i>",
             chat_id=message.chat.id,
@@ -1121,7 +1136,6 @@ async def handle_menu_callback(c: types.CallbackQuery):
     elif action == "ai":
         await bot.answer_callback_query(c.id)
         set_state(user_id, "ask_ai")
-        # Отправляем новое сообщение, меню остаётся в предыдущем
         await bot.send_message(
             message.chat.id,
             "🤖 Задай любой вопрос о крипте или контрактах.\n/cancel — выйти.",
