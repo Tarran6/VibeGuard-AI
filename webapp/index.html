@@ -21,19 +21,18 @@
         decimals: 18
       },
       rpcUrls: {
-        default: { http: ['https://opbnb-mainnet.nodereal.io/v1/YOUR-KEY'] } // Замените на ваш RPC URL
+        default: { http: ['https://opbnb-rpc.publicnode.com'] } // публичный RPC, ключ не нужен
       },
       blockExplorers: {
         default: { name: 'opBNBScan', url: 'https://opbnbscan.com' }
       }
     }
 
-    // Получаем nonce из Telegram WebApp initDataUnsafe (или из URL как запасной вариант)
+    // Получаем nonce из Telegram WebApp initDataUnsafe.start_param
     const tg = window.Telegram?.WebApp;
     let NONCE = '';
 
     if (tg?.initDataUnsafe?.start_param) {
-      // Если бот передал start_param (например, через кнопку с ?startapp=nonce)
       NONCE = tg.initDataUnsafe.start_param;
     } else {
       // Запасной вариант: берём из URL (на случай, если открыли напрямую)
