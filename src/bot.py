@@ -1155,8 +1155,24 @@ async def cmd_disconnect(m: types.Message) -> None:
     await bot.reply_to(m, "Выбери кошелёк для отключения:", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("dc:"))
-async def cb_disconnect(c: types.CallbackQuery) -> None:
+@bot.callback_query_handler(func=lambda c: c.data.startswith("dc:") or c.data == "connect_new")
+async def cb_wallet_action(c: types.CallbackQuery) -> None:
+    if c.data == "connect_new":
+        # Обработка кнопки "Подключить кошелёк" - сразу выполняем функцию
+        await bot.answer_callback_query(c.id)
+        await cmd_connect(types.Message(
+            message_id=c.message.message_id,
+            from_user=c.from_user,
+            date=int(time.time()),
+            chat=c.message.chat,
+            content_type="text",
+            options={},
+            json_string="",
+            text="/connect"
+        ))
+        return
+    
+    # Обработка отключения кошелька
     parts = c.data.split(":")
     if parts[1] == "cancel":
         await bot.answer_callback_query(c.id, "Отменено")
@@ -1184,11 +1200,28 @@ async def cb_disconnect(c: types.CallbackQuery) -> None:
 
     await save_db()
     await bot.answer_callback_query(c.id, "✅ Кошелёк отключён")
-    await bot.edit_message_text(
-        f"✅ Кошелёк отключён:\n<code>{esc(removed['address'])}</code>",
-        c.message.chat.id,
-        c.message.message_id,
-    )
+    
+    # Редактируем текущее сообщение вместо создания нового
+    try:
+        await bot.edit_message_text(
+            "✅ Кошелёк отключён. Загружаю обновленный список...",
+            c.message.chat.id,
+            c.message.message_id
+        )
+    except:
+        pass
+    
+    # Показываем обновленный список кошельков (без дублирования)
+    await cmd_mywallets(types.Message(
+        message_id=c.message.message_id,
+        from_user=c.from_user,
+        date=int(time.time()),
+        chat=c.message.chat,
+        content_type="text",
+        options={},
+        json_string="",
+        text="/mywallets"
+    ))
 
 
 @bot.message_handler(commands=["check"])
