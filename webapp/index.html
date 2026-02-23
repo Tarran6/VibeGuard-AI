@@ -40,50 +40,53 @@
     async function signMessage() {
       const status = document.getElementById('status');
       try {
-        // ПИНТИК ДЛЯ METAMASK (Deep Link)
-        if (/Android|iPhone|iPad/i.test(navigator.userAgent)) {
-          window.location.href = "wc:"; 
-        }
-
-        await new Promise(r => setTimeout(r, 500));
+        status.textContent = '✍️ Запрашиваем подпись в кошельке...';
+        
+        // Ждем немного, чтобы кошелек успел инициализироваться
+        await new Promise(r => setTimeout(r, 1000));
+        
         let provider = modal.getWalletProvider() || modal.getState()?.provider;
-        if (!provider) throw new Error('Провайдер не найден');
+        if (!provider) throw new Error('Кошелек не предоставил доступ. Попробуйте еще раз.');
 
         const ethersProvider = new ethers.BrowserProvider(provider);
         const signer = await ethersProvider.getSigner();
         const address = await signer.getAddress();
 
-        status.textContent = '✍️ Подпишите сообщение...';
         const message = `VibeGuard verification: ${NONCE}`;
         const signature = await signer.signMessage(message);
 
-        // ВАЖНО: Добавили nonce в отправку!
+        // ОТПРАВЛЯЕМ ПОЛНЫЙ ПАКЕТ ДАННЫХ
         tg.sendData(JSON.stringify({
           address: address,
           signature: signature,
           nonce: NONCE 
         }));
 
-        status.textContent = '✅ Успешно!';
+        status.textContent = '✅ Готово! Возвращаемся...';
         setTimeout(() => tg.close(), 1000);
 
       } catch (err) {
         status.textContent = '❌ ' + err.message;
+        console.error(err);
       }
     }
 
     window.connectWallet = async () => {
       const status = document.getElementById('status');
       status.style.display = 'block';
-      const state = modal.getState();
       
-      if (state?.address) {
+      const account = modal.getAccount();
+      
+      // Если уже законнекчены (для OKX это важно)
+      if (account && account.isConnected) {
         await signMessage();
       } else {
+        status.textContent = '💎 Открываем список кошельков...';
         await modal.open();
-        const unsubscribe = modal.subscribeAccount(async (newState) => {
-          if (newState.address) {
-            unsubscribe();
+        
+        // Подписываемся на изменения аккаунта
+        modal.subscribeAccount(async (state) => {
+          if (state.isConnected && state.address) {
             await signMessage();
           }
         });
@@ -93,15 +96,15 @@
   <style>
     body { font-family: sans-serif; background: #0a0a0c; color: white; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
     .container { background: #121216; border-radius: 24px; padding: 32px; width: 90%; max-width: 340px; text-align: center; border: 1px solid #26262c; }
-    .btn-main { background: #6366f1; color: white; border: none; border-radius: 16px; padding: 18px; width: 100%; font-size: 16px; font-weight: 600; cursor: pointer; }
-    #status { margin-top: 20px; color: #6366f1; display: none; }
+    .btn-main { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; border: none; border-radius: 16px; padding: 18px; width: 100%; font-size: 16px; font-weight: 700; cursor: pointer; }
+    #status { margin-top: 20px; color: #6366f1; display: none; font-weight: 500; }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="logo" style="font-size: 50px;">🛡️</div>
-    <h2>VibeGuard</h2>
-    <p>Подключите кошелёк для авторизации</p>
+    <div class="logo" style="font-size: 50px; margin-bottom: 10px;">🛡️</div>
+    <h2>VibeGuard AI</h2>
+    <p style="color: #8e8e93; font-size: 14px; margin-bottom: 25px;">Подключите MetaMask или OKX для верификации</p>
     <button class="btn-main" onclick="connectWallet()">🚀 Подключить кошелёк</button>
     <div id="status">Загрузка...</div>
   </div>
