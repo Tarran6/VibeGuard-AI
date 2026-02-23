@@ -1157,9 +1157,13 @@ async def cmd_disconnect(m: types.Message) -> None:
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("dc:") or c.data == "connect_new")
 async def cb_wallet_action(c: types.CallbackQuery) -> None:
+    # ОТЛАДКА
+    print(f"🔍 CALLBACK RECEIVED: {c.data}")
+    await bot.answer_callback_query(c.id, text=f"Получено: {c.data}")
+    
     if c.data == "connect_new":
         # Обработка кнопки "Подключить кошелёк"
-        await bot.answer_callback_query(c.id)
+        print("🔗 ОБРАБОТКА: connect_new")
         
         uid = c.from_user.id
         nonce = secrets.token_hex(16)
@@ -1197,6 +1201,7 @@ async def cb_wallet_action(c: types.CallbackQuery) -> None:
         return
     
     # Обработка отключения кошелька
+    print("🔪 ОБРАБОТКА: отключение кошелька")
     parts = c.data.split(":")
     if parts[1] == "cancel":
         await bot.answer_callback_query(c.id, "Отменено")
