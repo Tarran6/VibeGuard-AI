@@ -1158,23 +1158,42 @@ async def cmd_disconnect(m: types.Message) -> None:
 @bot.callback_query_handler(func=lambda c: c.data.startswith("dc:") or c.data == "connect_new")
 async def cb_wallet_action(c: types.CallbackQuery) -> None:
     if c.data == "connect_new":
-        # Обработка кнопки "Подключить кошелёк" - просто отвечаем и вызываем команду
+        # Обработка кнопки "Подключить кошелёк"
         await bot.answer_callback_query(c.id)
         
-        # Создаем простое сообщение для вызова команды
-        class FakeMessage:
-            def __init__(self, callback_query):
-                self.message_id = callback_query.message.message_id
-                self.from_user = callback_query.from_user
-                self.date = int(time.time())
-                self.chat = callback_query.message.chat
-                self.content_type = "text"
-                self.options = {}
-                self.json_string = ""
-                self.text = "/connect"
-        
-        fake_msg = FakeMessage(c)
-        await cmd_connect(fake_msg)
+        uid = c.from_user.id
+        nonce = secrets.token_hex(16)
+        uid_str = str(uid)
+
+        async with db_lock:
+            db["pending_verifications"][uid_str] = {
+                "nonce": nonce,
+                "ts": time.time(),
+            }
+        await save_db()
+
+        webapp_url_with_nonce = f"{WEBAPP_URL}?nonce={nonce}" if WEBAPP_URL else ""
+
+        kb = types.InlineKeyboardMarkup()
+        if WEBAPP_URL:
+            kb.add(types.InlineKeyboardButton(
+                "🔗 Подключить кошелёк",
+                web_app=types.WebAppInfo(url=webapp_url_with_nonce),
+            ))
+        else:
+            kb.add(types.InlineKeyboardButton(
+                "⚠️ WebApp не настроен",
+                callback_data="webapp_not_configured",
+            ))
+
+        await bot.send_message(
+            c.message.chat.id,
+            "👛 <b>Подключение кошелька</b>\n\n"
+            "Нажми кнопку ниже, выбери кошелёк (MetaMask, Trust Wallet и др.) "
+            "и подтверди подпись одним тапом.\n\n"
+            "<i>Сессия действительна 10 минут.</i>",
+            reply_markup=kb,
+        )
         return
     
     # Обработка отключения кошелька
@@ -1207,18 +1226,19 @@ async def cb_wallet_action(c: types.CallbackQuery) -> None:
     await bot.answer_callback_query(c.id, "✅ Кошелёк отключён")
     
     # Показываем обновленный список кошельков
+    await bot.send_message(
+        c.message.chat.id,
+        "✅ Кошелёк отключён. Обновленный список:",
+    )
+    
+    # Вызываем команду для показа списка
     class FakeMessage:
-        def __init__(self, callback_query):
-            self.message_id = callback_query.message.message_id
-            self.from_user = callback_query.from_user
-            self.date = int(time.time())
-            self.chat = callback_query.message.chat
-            self.content_type = "text"
-            self.options = {}
-            self.json_string = ""
+        def __init__(self, chat_id, from_user):
+            self.chat = types.Chat(chat_id, "")
+            self.from_user = from_user
             self.text = "/mywallets"
     
-    fake_msg = FakeMessage(c)
+    fake_msg = FakeMessage(c.message.chat.id, c.from_user)
     await cmd_mywallets(fake_msg)
 
 
