@@ -1158,18 +1158,23 @@ async def cmd_disconnect(m: types.Message) -> None:
 @bot.callback_query_handler(func=lambda c: c.data.startswith("dc:") or c.data == "connect_new")
 async def cb_wallet_action(c: types.CallbackQuery) -> None:
     if c.data == "connect_new":
-        # Обработка кнопки "Подключить кошелёк" - сразу выполняем функцию
+        # Обработка кнопки "Подключить кошелёк" - просто отвечаем и вызываем команду
         await bot.answer_callback_query(c.id)
-        await cmd_connect(types.Message(
-            message_id=c.message.message_id,
-            from_user=c.from_user,
-            date=int(time.time()),
-            chat=c.message.chat,
-            content_type="text",
-            options={},
-            json_string="",
-            text="/connect"
-        ))
+        
+        # Создаем простое сообщение для вызова команды
+        class FakeMessage:
+            def __init__(self, callback_query):
+                self.message_id = callback_query.message.message_id
+                self.from_user = callback_query.from_user
+                self.date = int(time.time())
+                self.chat = callback_query.message.chat
+                self.content_type = "text"
+                self.options = {}
+                self.json_string = ""
+                self.text = "/connect"
+        
+        fake_msg = FakeMessage(c)
+        await cmd_connect(fake_msg)
         return
     
     # Обработка отключения кошелька
@@ -1201,27 +1206,20 @@ async def cb_wallet_action(c: types.CallbackQuery) -> None:
     await save_db()
     await bot.answer_callback_query(c.id, "✅ Кошелёк отключён")
     
-    # Редактируем текущее сообщение вместо создания нового
-    try:
-        await bot.edit_message_text(
-            "✅ Кошелёк отключён. Загружаю обновленный список...",
-            c.message.chat.id,
-            c.message.message_id
-        )
-    except:
-        pass
+    # Показываем обновленный список кошельков
+    class FakeMessage:
+        def __init__(self, callback_query):
+            self.message_id = callback_query.message.message_id
+            self.from_user = callback_query.from_user
+            self.date = int(time.time())
+            self.chat = callback_query.message.chat
+            self.content_type = "text"
+            self.options = {}
+            self.json_string = ""
+            self.text = "/mywallets"
     
-    # Показываем обновленный список кошельков (без дублирования)
-    await cmd_mywallets(types.Message(
-        message_id=c.message.message_id,
-        from_user=c.from_user,
-        date=int(time.time()),
-        chat=c.message.chat,
-        content_type="text",
-        options={},
-        json_string="",
-        text="/mywallets"
-    ))
+    fake_msg = FakeMessage(c)
+    await cmd_mywallets(fake_msg)
 
 
 @bot.message_handler(commands=["check"])
