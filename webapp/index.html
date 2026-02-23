@@ -20,27 +20,26 @@
       blockExplorers: { default: { name: 'opBNBScan', url: 'https://opbnbscan.com' } }
     };
 
-    // Получаем nonce из URL (startapp или nonce)
+    // Получаем параметры из URL
     const urlParams = new URLSearchParams(window.location.search);
     const NONCE = urlParams.get('startapp') || urlParams.get('nonce');
     const tg = window.Telegram?.WebApp;
 
-    // Проверка запуска внутри Telegram
+    // Проверка Telegram
     if (!tg || !tg.sendData) {
-      document.body.innerHTML = '<div style="background:#0a0a0c;color:white;text-align:center;padding:50px;"><h2>🛡️ VibeGuard</h2><p>Откройте эту страницу через бота в Telegram.</p></div>';
+      document.body.innerHTML = '<div style="background:#0a0a0c;color:white;text-align:center;padding:50px;"><h2>🛡️ VibeGuard</h2><p>Откройте через бота в Telegram.</p></div>';
       throw new Error('Not in Telegram');
     }
 
     tg.expand();
     tg.ready();
 
-    // Проверка наличия nonce
     if (!NONCE) {
-      document.body.innerHTML = '<div style="background:#0a0a0c;color:white;text-align:center;padding:50px;"><h2>❌ Ошибка</h2><p>Сессия не найдена. Нажмите /connect в боте заново.</p></div>';
-      throw new Error('No nonce provided');
+      document.body.innerHTML = '<div style="background:#0a0a0c;color:white;text-align:center;padding:50px;"><h2>❌ Ошибка</h2><p>Сессия не найдена. Нажмите /connect заново.</p></div>';
+      throw new Error('No nonce');
     }
 
-    // Создаём модалку WalletConnect
+    // Создаём AppKit
     let modal;
     try {
       modal = createAppKit({
@@ -54,88 +53,79 @@
         },
         themeMode: 'dark'
       });
-      console.log('AppKit создан');
     } catch (e) {
-      console.error('Ошибка создания AppKit:', e);
+      console.error(e);
       document.body.innerHTML = '<div style="background:#0a0a0c;color:white;text-align:center;padding:50px;"><h2>❌ Ошибка</h2><p>Не удалось инициализировать WalletConnect.</p></div>';
       throw e;
     }
 
-    // Функция подписи (вынесена отдельно)
+    // Функция подписи с автоматическим закрытием
     async function signMessage() {
       const status = document.getElementById('status');
       try {
-        // Небольшая задержка для стабильности
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        const provider = modal.getWalletProvider();
+        // Получаем провайдер
+        let provider = modal.getWalletProvider();
         if (!provider) {
-          // Пробуем получить провайдер ещё раз через getState
           const state = modal.getState();
-          console.log('Состояние AppKit:', state);
-          
-          if (state?.provider) {
-            console.log('Провайдер найден через getState');
-            const ethersProvider = new ethers.BrowserProvider(state.provider);
-            const signer = await ethersProvider.getSigner();
-            const address = await signer.getAddress();
-            const message = `VibeGuard verification: ${NONCE}`;
-            const signature = await signer.signMessage(message);
-            
-            tg.sendData(JSON.stringify({ address, signature }));
-            status.textContent = '✅ Успешно! Закрываем...';
-            setTimeout(() => tg.close(), 1000);
-            return;
-          }
-          
-          throw new Error('Провайдер не найден. Попробуйте ещё раз.');
+          provider = state?.provider;
         }
+        if (!provider) throw new Error('Провайдер не найден');
 
         const ethersProvider = new ethers.BrowserProvider(provider);
         const signer = await ethersProvider.getSigner();
         const address = await signer.getAddress();
 
+        status.textContent = '✍️ Подпишите сообщение в кошельке...';
+
         const message = `VibeGuard verification: ${NONCE}`;
         const signature = await signer.signMessage(message);
 
+        // Отправляем данные в бота
         tg.sendData(JSON.stringify({
           address: address,
           signature: signature
         }));
 
-        status.textContent = '✅ Успешно! Закрываем...';
-        setTimeout(() => tg.close(), 1000);
+        status.textContent = '✅ Успешно! Возвращаемся в бота...';
+        
+        // Небольшая задержка, чтобы пользователь увидел успех
+        setTimeout(() => {
+          tg.close(); // Принудительно закрываем WebApp → возврат в чат
+        }, 1500);
+
       } catch (err) {
-        status.textContent = 'Ошибка подписи: ' + err.message;
+        status.textContent = '❌ ' + err.message;
         console.error(err);
+        // Даём возможность повторить
+        setTimeout(() => {
+          status.style.display = 'none';
+        }, 3000);
       }
     }
 
-    // Подключаем кошелёк с надёжной проверкой
     window.connectWallet = async () => {
       const status = document.getElementById('status');
       status.style.display = 'block';
+      status.textContent = 'Проверяем подключение...';
 
       try {
-        // Получаем полное состояние
         const state = modal.getState();
-        const hasRealConnection = state?.address && state?.isConnected;
-
-        if (hasRealConnection) {
-          // Если есть реальный адрес, идём подписывать
-          status.textContent = 'Кошелёк уже подключён, запрашиваем подпись...';
+        
+        // Реальное подключение = есть адрес
+        if (state?.address) {
+          status.textContent = 'Кошелёк найден, запрашиваем подпись...';
           await signMessage();
           return;
         }
 
-        // Нет реального подключения — открываем выбор кошелька
+        // Нет подключения — открываем выбор
         status.textContent = 'Открываем выбор кошелька...';
         await modal.open();
 
-        // Подписываемся на первое успешное подключение
+        // Ждём подключения
         const unsubscribe = modal.subscribeAccount(async (newState) => {
-          if (newState.address && newState.isConnected) {
-            unsubscribe(); // Отписываемся сразу
+          if (newState.address) {
+            unsubscribe();
             status.textContent = 'Кошелёк подключён, запрашиваем подпись...';
             await signMessage();
           }
