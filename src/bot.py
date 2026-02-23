@@ -993,6 +993,7 @@ async def cmd_start(m: types.Message) -> None:
 
 @bot.message_handler(commands=["connect"])
 async def cmd_connect(m: types.Message) -> None:
+    logger.info(f"🔗 /connect вызван user_id={m.from_user.id}")
     uid = m.from_user.id
     nonce = secrets.token_hex(16)
 
@@ -1004,7 +1005,11 @@ async def cmd_connect(m: types.Message) -> None:
     await save_db()
 
     # Формируем URL с параметрами startapp и wc_project_id
-    webapp_url = f"{WEBAPP_URL}?startapp={nonce}&wc_project_id={REOWN_PROJECT_ID}"
+    parts = [f"startapp={nonce}", f"wc_project_id={REOWN_PROJECT_ID}"]
+    if BOT_PUBLIC_URL:
+        parts.append(f"api={BOT_PUBLIC_URL}/webapp/connect")
+    webapp_url = f"{WEBAPP_URL}?{'&'.join(parts)}"
+    logger.info(f"🔗 WebApp URL: {webapp_url}")
 
     kb = types.InlineKeyboardMarkup()
     if WEBAPP_URL and REOWN_PROJECT_ID:
