@@ -99,6 +99,12 @@ ERC20_TRANSFER_TOPIC = (
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 )
 
+# ---------------------------------------------------------------------------
+# СОЗДАНИЕ БОТА
+# ---------------------------------------------------------------------------
+
+bot = AsyncTeleBot(TELEGRAM_TOKEN)
+
 if not any([XAI_KEYS, GROQ_KEYS, GEMINI_KEYS]):
     logger.warning("⚠️  Ни один AI-ключ не задан — AI-функции отключены")
 
@@ -955,9 +961,9 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
 
 def kb_main() -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    kb.add("� Мои кошельки", "🔗 Подключить кошелёк")
+    kb.add("👛 Мои кошельки", "🔗 Подключить кошелёк")
     kb.add("📊 Статистика", "🧠 AI Ассистент")
-    kb.add("� Проверить контракт", "⚙️ Настройки")
+    kb.add("🔍 Проверить контракт", "⚙️ Настройки")
     kb.add("🛡️ Поддержка")
     return kb
 
@@ -1115,6 +1121,45 @@ async def cb_disconnect(c: types.CallbackQuery) -> None:
     )
 
 
+@bot.callback_query_handler(func=lambda c: c.data == "connect_new")
+async def cb_connect_new(c: types.CallbackQuery) -> None:
+    await bot.answer_callback_query(c.id)
+    
+    uid = c.from_user.id
+    nonce = secrets.token_hex(16)
+    uid_str = str(uid)
+
+    async with db_lock:
+        db["pending_verifications"][uid_str] = {
+            "nonce": nonce,
+            "ts": time.time(),
+        }
+    await save_db()
+
+    webapp_url_with_nonce = f"{WEBAPP_URL}?nonce={nonce}" if WEBAPP_URL else ""
+
+    kb = types.InlineKeyboardMarkup()
+    if WEBAPP_URL:
+        kb.add(types.InlineKeyboardButton(
+            "🔗 Connect Wallet",
+            web_app=types.WebAppInfo(url=webapp_url_with_nonce),
+        ))
+    else:
+        kb.add(types.InlineKeyboardButton(
+            "⚠️ WebApp не настроен",
+            callback_data="webapp_not_configured",
+        ))
+
+    await bot.send_message(
+        c.message.chat.id,
+        "👛 <b>Подключение кошелька</b>\n\n"
+        "Нажми кнопку ниже, выбери кошелёк (MetaMask, Trust Wallet и др.) "
+        "и подтверди подпись одним тапом.\n\n"
+        "<i>Сессия действительна 10 минут.</i>",
+        reply_markup=kb,
+    )
+
+
 @bot.callback_query_handler(func=lambda c: c.data == "webapp_not_configured")
 async def cb_webapp_not_configured(c: types.CallbackQuery) -> None:
     await bot.answer_callback_query(
@@ -1131,10 +1176,13 @@ async def cmd_mywallets(m: types.Message) -> None:
         wallets = list(db["connected_wallets"].get(str(uid), []))
 
     if not wallets:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔗 Подключить кошелёк", callback_data="connect_new"))
         await bot.reply_to(
             m,
             "👛 У тебя нет подключённых кошельков.\n"
-            "/connect — подключить.",
+            "Нажми кнопку ниже чтобы подключить:",
+            reply_markup=kb
         )
         return
 
@@ -1145,12 +1193,25 @@ async def cmd_mywallets(m: types.Message) -> None:
         f"{i+1}. <b>{esc(w['label'])}</b>\n   <code>{esc(w['address'])}</code>"
         for i, w in enumerate(wallets)
     )
+    
+    # Добавляем кнопки управления
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for i, w in enumerate(wallets):
+        short = f"{w['address'][:6]}...{w['address'][-4:]}"
+        kb.add(types.InlineKeyboardButton(
+            f"❌ {w['label']} ({short})",
+            callback_data=f"dc:{uid}:{i}",
+        ))
+    
+    kb.add(types.InlineKeyboardButton("🔗 Добавить кошелёк", callback_data="connect_new"))
+    
     await bot.reply_to(
         m,
         f"👛 <b>Твои кошельки ({len(wallets)}/5):</b>\n\n"
         f"{lines}\n\n"
         f"🔔 Алерты при любом движении.\n"
         f"🐳 Глобальный лимит китов: <b>${limit:,.0f}</b>",
+        reply_markup=kb
     )
 
 
@@ -1359,24 +1420,29 @@ async def cmd_cancel(m: types.Message) -> None:
 
 
 @bot.message_handler(func=lambda m: m.text in {
-    "📊 Status", "🧠 Ask AI", "👛 My Wallets", "🔍 Check Contract", "🛡️ Support"
+    "� Мои кошельки", "🔗 Подключить кошелёк", "�� Статистика", 
+    "🧠 AI Ассистент", "� Проверить контракт", "⚙️ Настройки", "🛡️ Поддержка"
 })
 async def handle_menu(m: types.Message) -> None:
     t = m.text
-    if t == "📊 Status":
+    if t == "� Мои кошельки":
+        await cmd_mywallets(m)
+    elif t == "🔗 Подключить кошелёк":
+        await cmd_connect(m)
+    elif t == "📊 Статистика":
         await cmd_status(m)
-    elif t == "🧠 Ask AI":
+    elif t == "🧠 AI Ассистент":
         set_state(m.from_user.id, "ask_ai")
         await bot.reply_to(
             m,
             "🤖 Задай любой вопрос о крипте или контрактах.\n/cancel — выйти.",
         )
-    elif t == "👛 My Wallets":
-        await cmd_mywallets(m)
-    elif t == "🔍 Check Contract":
+    elif t == "🔍 Проверить контракт":
         set_state(m.from_user.id, "check_contract")
         await bot.reply_to(m, "Отправь адрес контракта для проверки:")
-    elif t == "🛡️ Support":
+    elif t == "⚙️ Настройки":
+        await cmd_limit(m)
+    elif t == "🛡️ Поддержка":
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("Связаться с менеджером", url="https://t.me/tarran6"))
         await bot.send_message(m.chat.id, "Нужна помощь?", reply_markup=kb)
