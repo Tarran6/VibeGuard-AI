@@ -104,9 +104,9 @@ GROQ_KEYS   = [k for k in _optional("GROQ_API_KEY").split(",") if k.strip()]
 XAI_KEYS    = [k for k in _optional("XAI_API_KEY").split(",")    if k.strip()]
 
 # AI модели (можно переопределить через env)
-XAI_MODEL = _optional("XAI_MODEL", "grok-2-latest")
-GROQ_MODEL = _optional("GROQ_MODEL", "llama-3.1-70b-versatile")
-GEMINI_MODEL = _optional("GEMINI_MODEL", "gemini-2.0-flash-exp")
+XAI_MODEL = _optional("XAI_MODEL", "grok-2-1212")
+GROQ_MODEL = _optional("GROQ_MODEL", "llama-3.3-70b-versatile")
+GEMINI_MODEL = _optional("GEMINI_MODEL", "gemini-2.0-flash")
 
 GOPLUS_APP_KEY    = _optional("GOPLUS_APP_KEY")
 GOPLUS_APP_SECRET = _optional("GOPLUS_APP_SECRET")
@@ -146,6 +146,7 @@ if not WEBAPP_URL:
 _DB_DEFAULT: dict = {
     "stats": {"blocks": 0, "whales": 0, "threats": 0},
     "cfg":   {"limit_usd": 10_000.0, "watch": [], "ignore": []},
+    "user_limits": {}, # <-- Добавили хранилище персональных лимитов
     "last_block": 0,
     "connected_wallets": {},
     "pending_verifications": {},
@@ -341,7 +342,7 @@ async def rpc(payload: dict) -> dict:
     timeout = aiohttp.ClientTimeout(total=12)
     async with rpc_sem:
         last_error = None
-        for url in HTTP_URLS:
+        for url in ALL_RPC_URLS: # <-- Используем все ссылки по очереди
             try:
                 async with http_session.post(url, json=payload, timeout=timeout) as r:
                     if r.status == 429:
@@ -352,9 +353,10 @@ async def rpc(payload: dict) -> dict:
             except Exception as e:
                 last_error = str(e)
                 continue
+        
         if last_error == "RPC 429":
-            raise RuntimeError("RPC 429")
-        raise RuntimeError(f"Все RPC узлы недоступны. Последняя ошибка: {last_error}")
+            raise RuntimeError("RPC 429 - все узлы перегружены")
+        raise RuntimeError(f"Все RPC узлы недоступны. Ошибка: {last_error}")
 
 
 async def get_block(number: int) -> Optional[dict]:
@@ -596,6 +598,40 @@ def _is_connected_wallet(address: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# SaaS ДВИЖОК РАССЫЛКИ
+# ---------------------------------------------------------------------------
+
+def get_whale_markup(token_addr: str = None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btns = []
+    if token_addr:
+        btns.append(types.InlineKeyboardButton("📊 График", url=f"https://dexscreener.com/bsc/{token_addr}"))
+    btns.append(types.InlineKeyboardButton("⚙️ Мой лимит", callback_data="menu_settings"))
+    markup.add(*btns)
+    return markup
+
+async def broadcast_whale(amount_usd: float, text: str, token_addr: str = None):
+    markup = get_whale_markup(token_addr)
+    # 1. Админы получают всё
+    for admin_id in OWNERS:
+        await safe_send(admin_id, text, reply_markup=markup)
+        
+    # 2. Юзеры получают только если сумма больше ИХ лимита
+    async with db_lock:
+        user_limits = db.get("user_limits", {})
+        global_limit = db["cfg"]["limit_usd"]
+        all_users = set(db.get("connected_wallets", {}).keys()) | set(user_limits.keys())
+
+    for uid_str in all_users:
+        uid = int(uid_str)
+        if uid in OWNERS: continue
+        
+        limit = user_limits.get(uid_str, global_limit)
+        if amount_usd >= limit:
+            await safe_send(uid, text, reply_markup=markup)
+
+
+# ---------------------------------------------------------------------------
 # ОБРАБОТКА BNB-ТРАНЗАКЦИЙ
 # ---------------------------------------------------------------------------
 
@@ -654,22 +690,19 @@ async def process_bnb_tx(tx: dict) -> None:
                 f"(${val_usd:,.0f}) от {sender} к {target}. "
                 f"Что это может значить? Без HTML-тегов."
             )
-        await notify_owners(f"{whale_text}\n\n🧠 <b>AI:</b> {verdict}")
-
         risks = await check_scam(target)
-        if risks:
-            async with db_lock:
-                db["stats"]["threats"] += 1
-            threat = (
-                f"🚨 <b>УГРОЗА СКАМ</b>\n"
-                f"<code>{esc(target)}</code>\n"
-                f"Риски: {esc(', '.join(risks))}"
-            )
-            await notify_owners(threat)
-
-        score   = 25 if risks else 85
+        score = 25 if risks else 85
         is_safe = not bool(risks)
-        await notify_owners(f"🛡️ <b>VibeScore: {score}/100</b> ({'Безопасно' if is_safe else 'Риск'})")
+        
+        full_report = (
+            f"{whale_text}\n\n"
+            f"🧠 <b>AI:</b> {verdict}\n"
+            f"🛡️ <b>VibeScore: {score}/100</b>\n"
+            f"{'🚨 <b>УГРОЗА СКАМ:</b> ' + ', '.join(risks) if risks else '✅ Безопасно'}"
+        )
+        
+        # Вместо notify_owners используем Умную рассылку
+        await broadcast_whale(val_usd, full_report)
         asyncio.create_task(log_onchain(target, score, is_safe))
 
     except Exception as e:
@@ -743,24 +776,20 @@ async def process_erc20_log(log: dict) -> None:
                 f"(${val_usd:,.0f}) контракта {token_addr}. "
                 f"Что это может значить? Без HTML-тегов."
             )
-        await notify_owners(f"{whale_text}\n\n🧠 <b>AI:</b> {verdict}")
-
         risks = await check_scam(token_addr)
-        if risks:
-            async with db_lock:
-                db["stats"]["threats"] += 1
-            await notify_owners(
-                f"🚨 <b>СКАМ-ТОКЕН</b>\n"
-                f"<code>{esc(token_addr)}</code>\n"
-                f"Риски: {esc(', '.join(risks))}"
-            )
-
         score = 25 if risks else 85
         is_safe = not bool(risks)
-        await notify_owners(f"🛡️ <b>VibeScore: {score}/100</b> ({'Безопасно' if is_safe else 'Риск'})")
-        asyncio.create_task(
-            log_onchain(token_addr, score, is_safe)
+        
+        full_report = (
+            f"{whale_text}\n\n"
+            f"🧠 <b>AI:</b> {verdict}\n"
+            f"🛡️ <b>VibeScore: {score}/100</b>\n"
+            f"{'🚨 <b>УГРОЗА СКАМ:</b> ' + ', '.join(risks) if risks else '✅ Безопасно'}"
         )
+        
+        # Вместо notify_owners используем Умную рассылку с token_addr
+        await broadcast_whale(val_usd, full_report, token_addr)
+        asyncio.create_task(log_onchain(token_addr, score, is_safe))
 
     except Exception as e:
         logger.error(f"process_erc20_log: {e}", exc_info=True)
@@ -1184,13 +1213,17 @@ async def handle_menu_callback(c: types.CallbackQuery):
         await bot.send_message(message.chat.id, "Отправь адрес контракта для проверки:")
     elif action == "settings":
         await bot.answer_callback_query(c.id)
-        text = await get_limit_text()
-        await bot.edit_message_text(
-            text,
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            reply_markup=get_main_menu_keyboard()
+        async with db_lock:
+            user_limit = db.get("user_limits", {}).get(str(user_id), db["cfg"]["limit_usd"])
+        
+        set_state(user_id, "wait_limit")
+        text = (
+            f"⚙️ <b>Настройки лимита</b>\n\n"
+            f"Твой порог алертов: <b>${user_limit:,.0f}</b>\n\n"
+            f"👇 <b>Напиши новую сумму числом</b> (мин. $3,000).\n"
+            f"<i>Админам разрешено любое число.</i>"
         )
+        await bot.edit_message_text(text, chat_id=message.chat.id, message_id=message.message_id, reply_markup=get_main_menu_keyboard())
     elif action == "support":
         await bot.answer_callback_query(c.id)
         kb = types.InlineKeyboardMarkup()
@@ -1731,6 +1764,27 @@ async def main() -> None:
         if pool:
             await pool.close()
         logger.info("✅ Все ресурсы освобождены")
+
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id) == "wait_limit")
+async def handle_limit_input(m: types.Message) -> None:
+    uid = m.from_user.id
+    try:
+        val = float(m.text.strip().replace("$", "").replace(",", ""))
+        min_allowed = 1.0 if is_owner(uid) else 3000.0
+        
+        if val < min_allowed:
+            await bot.reply_to(m, f"❌ Минимальный лимит: ${min_allowed:,.0f}")
+            return
+
+        async with db_lock:
+            if "user_limits" not in db: db["user_limits"] = {}
+            db["user_limits"][str(uid)] = val
+        await save_db()
+        clear_state(uid)
+        await bot.reply_to(m, f"✅ Твой личный лимит установлен: <b>${val:,.0f}</b>", reply_markup=get_main_menu_keyboard())
+    except ValueError:
+        await bot.reply_to(m, "❌ Введи просто число (например: 5000)")
 
 
 if __name__ == "__main__":
