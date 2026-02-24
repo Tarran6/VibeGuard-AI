@@ -1391,7 +1391,7 @@ async def cmd_mywallets(m: types.Message) -> None:
 
     await bot.reply_to(
         m,
-        f"👛 <b>Твои кошельки ({len(wallets)}/5):</b>\n\n"
+        f"👛 <b>Твой подключённый кошелёк:</b>\n\n"
         f"{lines}\n\n"
         f"🔔 Алерты при любом движении.\n"
         f"🐳 Глобальный лимит китов: <b>${limit:,.0f}</b>",
@@ -1920,85 +1920,6 @@ async def _run_health_server() -> None:
             logger.error(f"handle_approvals error: {e}")
             return web.json_response({"ok": False, "error": "scan failed"}, status=500, headers=cors_headers)
 
-    async def handle_webapp_approvals(request):
-        """API endpoint для сканирования approve с GoPlus"""
-        try:
-            payload = await request.json()
-        except Exception:
-            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
-
-        address = str(payload.get("address", "")).strip()
-        
-        if not address or not Web3.is_address(address):
-            return web.json_response({"ok": False, "error": "invalid address"}, status=400, headers=cors_headers)
-        
-        try:
-            # Получаем данные из GoPlus API
-            async with http_session.get(
-                f"https://api.gopluslabs.io/api/v1/token_approvals?chain_id=204&user_address={address}"
-            ) as resp:
-                if resp.status != 200:
-                    raise Exception("GoPlus API error")
-                
-                goplus_data = await resp.json()
-                
-                if goplus_data.get("code") != 1:
-                    raise Exception("GoPlus API returned error")
-                
-                result_data = goplus_data.get("result", {})
-                approvals = []
-                
-                # Обрабатываем токены с approve
-                for token_addr, token_data in result_data.items():
-                    if token_addr.startswith("0x") and token_data:
-                        # Проверяем есть ли approve permissions
-                        allowance = token_data.get("allowance", "0")
-                        if allowance and allowance != "0" and allowance != "null":
-                            # Получаем информацию о токене
-                            token_name = token_data.get("token_name", "Unknown")
-                            token_symbol = token_data.get("symbol", "???")
-                            token_decimal = int(token_data.get("token_decimal", "18"))
-                            
-                            # Форматируем количество
-                            try:
-                                amount = int(allowance, 16) if allowance.startswith("0x") else int(allowance)
-                                amount_formatted = format_amount(amount, token_decimal)
-                            except:
-                                amount_formatted = "Unknown"
-                            
-                            # Проверяем риски
-                            risks = []
-                            if token_data.get("is_scam", "0") == "1":
-                                risks.append("SCAM")
-                            if token_data.get("is_honeypot", "0") == "1":
-                                risks.append("HONEYPOT")
-                            if token_data.get("is_anti_scam", "0") == "1":
-                                risks.append("ANTI_SCAM")
-                            
-                            # Определяем уровень риска
-                            risk_level = "high" if risks else "medium"
-                            
-                            approvals.append({
-                                "tokenAddress": token_addr,
-                                "tokenName": token_name,
-                                "tokenSymbol": token_symbol,
-                                "spenderAddress": token_data.get("spender", "Unknown"),
-                                "amount": allowance,
-                                "amountFormatted": amount_formatted,
-                                "risk": risk_level,
-                                "risks": risks,
-                                "logoURL": token_data.get("logo_url", "")
-                            })
-                
-                # Сортируем по риску (high вначале)
-                approvals.sort(key=lambda x: (x["risk"] != "high"))
-                
-                return web.json_response({"ok": True, "approvals": approvals}, headers=cors_headers)
-                
-        except Exception as e:
-            logger.error(f"handle_webapp_approvals error: {e}")
-            return web.json_response({"ok": False, "error": "scan failed"}, status=500, headers=cors_headers)
-
     async def handle_webapp_connect_options(_):
         return web.Response(status=204, headers=cors_headers)
 
@@ -2044,11 +1965,10 @@ async def _run_health_server() -> None:
 
     app = web.Application()
     app.router.add_get("/", handle)
-    app.router.add_options("/webapp/connect", handle_webapp_connect_options)
     app.router.add_post("/webapp/connect", handle_webapp_connect)
-    app.router.add_options("/webapp/approvals", handle_webapp_approvals_options)
     app.router.add_get("/webapp/approvals", handle_webapp_approvals)
     app.router.add_post("/webapp/approvals", handle_webapp_approvals)
+    app.router.add_options("/{tail:.*}", handle_webapp_connect_options)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
