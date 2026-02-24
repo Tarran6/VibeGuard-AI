@@ -1718,12 +1718,12 @@ async def main() -> None:
     logger.info("✅ PostgreSQL подключена")
 
     try:
-        chain_data = await rpc({"jsonrpc": "2.0", "method": "eth_chainId", "id": 1})
-        chain_id = int(chain_data.get("result", "0x0"), 16)
+        w3 = get_smart_w3(_RAW_HTTP_URL)
+        chain_id = w3.eth.chain_id
         if chain_id != 204:
             logger.error(f"❌ Неверная сеть! Ожидается opBNB (204), получено {chain_id}")
         else:
-            logger.info("✅ Подключены к opBNB Mainnet")
+            logger.info("✅ Умное подключение к opBNB Mainnet установлено")
     except Exception as e:
         logger.warning(f"Не удалось проверить chainId: {e}")
 
