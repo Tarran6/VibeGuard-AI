@@ -19,7 +19,7 @@ from asyncio import Lock, Queue, Semaphore
 from typing import Optional
 
 import aiohttp
-import aiosqlite
+import asyncpg
 from dotenv import load_dotenv
 from eth_account.messages import encode_defunct
 from telebot import types
