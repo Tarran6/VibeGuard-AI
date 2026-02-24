@@ -162,14 +162,17 @@ async function secureConnect() {
 
     async function fetchApprovals() {
         try {
-            const response = await fetch(`https://vibeguard-ai-production-7512.up.railway.app/webapp/approvals?address=${window.globalSigner.address}`);
+            const address = window.globalSigner.address;
+            
+            // ИСПОЛЬЗУЕМ GET ЗАПРОС - КАК ЗАРЕГИСТРИРОВАНО В BOT.PY
+            const response = await fetch(`https://vibeguard-ai-production-7512.up.railway.app/webapp/approvals?address=${address}`);
             
             const result = await response.json();
             const list = document.getElementById('approvals-list');
             
             if (result.ok && result.approvals) {
                 if (result.approvals.length === 0) {
-                    list.innerHTML = '<div style="text-align: center; padding: 20px; color: #10b981;">✅ Опасных approve не найдено</div>';
+                    list.innerHTML = '<div style="text-align: center; padding: 20px; color: #10b981;">✅ Опасных доступов не найдено</div>';
                     return;
                 }
                 
@@ -177,37 +180,31 @@ async function secureConnect() {
                 result.approvals.forEach(app => {
                     const item = document.createElement('div');
                     item.className = 'approval-item';
-                    
-                    // Цвет рамки в зависимости от риска
-                    const borderColor = app.risk === 'high' ? '#ef4444' : '#f59e0b';
-                    item.style.borderLeftColor = borderColor;
+                    const riskColor = app.risk === 'high' ? '#ef4444' : '#f59e0b';
+                    item.style.borderLeftColor = riskColor;
                     
                     // Форматируем amount
                     const amount = app.amount === '115792089237316195423570985008687907853269984665640564039457584007913129639935' 
                         ? '∞ (Unlimited)' 
                         : app.amount;
                     
-                    // Текст риска
-                    const riskText = app.risk === 'high' ? '🚨 ВЫСОКИЙ РИСК' : '⚠️ НИЗКИЙ РИСК';
-                    const riskClass = app.risk === 'high' ? 'high' : 'low';
-                    
                     item.innerHTML = `
                         <div class="approval-info">
                             <strong>${app.tokenName}</strong>
-                            <span class="spender">Доступ у: ${app.spenderAddress.substring(0,8)}...${app.spenderAddress.substring(36)}</span>
+                            <span class="spender">Спендер: ${app.spenderAddress.substring(0,8)}...${app.spenderAddress.substring(36)}</span>
                             <span class="amount">Лимит: ${amount}</span>
-                            <span class="risk-badge ${riskClass}">${riskText}</span>
+                            <span class="risk-badge ${app.risk}">${app.risk === 'high' ? '🚨 HIGH RISK' : '⚠️ WARNING'}</span>
                         </div>
                         <button class="btn-revoke" onclick="window.revokeAccess('${app.tokenAddress}', '${app.spenderAddress}')">Revoke</button>
                     `;
                     list.appendChild(item);
                 });
             } else {
-                list.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">❌ Ошибка сканирования: ' + (result.error || 'неизвестная ошибка') + '</div>';
+                list.innerHTML = `<div style="text-align: center; color: #ef4444;">❌ Ошибка: ${result.error || 'неизвестно'}</div>`;
             }
         } catch (error) {
-            console.error('fetchApprovals error:', error);
-            document.getElementById('approvals-list').innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">❌ Не удалось загрузить данные. Проверьте подключение.</div>';
+            console.error('Ошибка сканирования:', error);
+            document.getElementById('approvals-list').innerHTML = '<div style="text-align: center; color: #ef4444;">❌ Ошибка связи с сервером</div>';
         }
     }
 
