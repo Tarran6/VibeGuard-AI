@@ -1,16 +1,9 @@
 # =============================================================================
-<<<<<<< HEAD
 #  VibeGuard Sentinel — src/bot.py (v24.4 Fixed)
 #  Исправления:
 #    • Объединен обработчик web_app_data для исключения конфликтов.
 #    • Добавлена корректная обработка nonce для верификации подписи.
 #    • Добавлено принудительное сохранение базы данных после привязки.
-=======
-#  VibeGuard Sentinel — src/bot.py (v24.4 FULL OPTIMIZED)
-#  Исправления:
-#    • Индекс O(1) для мгновенного поиска WebApp сессий
-#    • Сохранена вся оригинальная логика AI и мониторинга
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 # =============================================================================
 
 import asyncio
@@ -62,17 +55,12 @@ TELEGRAM_TOKEN   = _require("TELEGRAM_TOKEN")
 DATABASE_URL      = _require("DATABASE_URL")
 PRIMARY_OWNER_ID = int(_require("PRIMARY_OWNER_ID"))
 
-<<<<<<< HEAD
 # Парсинг пула RPC ссылок с резервными узлами
-=======
-# Парсинг пула RPC ссылок
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 _RAW_HTTP_URL = _require("OPBNB_HTTP_URL")
 HTTP_URLS = [u.strip() for u in _RAW_HTTP_URL.split(",") if u.strip()]
 if not HTTP_URLS:
     raise EnvironmentError("OPBNB_HTTP_URL пуст или содержит невалидные данные")
 
-<<<<<<< HEAD
 # Резервные RPC (public nodes)
 FALLBACK_RPCS = [
     "https://opbnb-mainnet-rpc.bnbchain.org",
@@ -82,8 +70,34 @@ FALLBACK_RPCS = [
 # Объединяем основные и резервные RPC
 ALL_RPC_URLS = HTTP_URLS + FALLBACK_RPCS
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
+
+# ---------------------------------------------------------------------------
+# УМНОЕ ПОДКЛЮЧЕНИЕ К БЛОКЧЕЙНУ
+# ---------------------------------------------------------------------------
+
+def get_smart_w3(url_string):
+    """Умное подключение к блокчейну с автоматическим переключением"""
+    urls = [u.strip() for u in url_string.split(",") if u.strip()]
+    # Пробуем подключиться по очереди, пока не найдем живой узел
+    for url in urls:
+        try:
+            if url.startswith('http'):
+                provider = Web3.HTTPProvider(url, request_kwargs={'timeout': 10})
+            elif url.startswith('ws'):
+                provider = Web3.WebsocketProvider(url)
+            else:
+                continue
+                
+            temp_w3 = Web3(provider)
+            if temp_w3.is_connected():
+                logger.info(f"✅ Успешное подключение к блокчейну через: {url}")
+                return temp_w3
+        except Exception as e:
+            logger.warning(f"⚠️ Узел {url} недоступен, пробую следующий... Ошибка: {e}")
+            continue
+    raise Exception("❌ КРИТИЧЕСКАЯ ОШИБКА: Ни один из RPC-узлов не отвечает!")
+
+
 # Опциональные
 GEMINI_KEYS = [k for k in _optional("GEMINI_API_KEY").split(",") if k.strip()]
 GROQ_KEYS   = [k for k in _optional("GROQ_API_KEY").split(",") if k.strip()]
@@ -111,16 +125,7 @@ LOGO_URL = _optional(
     "https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png"
 )
 
-<<<<<<< HEAD
-# Multi-sig владельцы (можно расширить через .env)
-_ADDITIONAL_OWNERS = [int(uid) for uid in _optional("ADDITIONAL_OWNERS", "").split(",") if uid.strip().isdigit()]
-OWNERS: set[int] = {PRIMARY_OWNER_ID} | set(_ADDITIONAL_OWNERS)
-
-# Требуемые подтверждения для критических действий
-MULTISIG_THRESHOLD = max(1, int(_optional("MULTISIG_THRESHOLD", "1")))
-=======
 OWNERS: set[int] = {PRIMARY_OWNER_ID}
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 
 ERC20_TRANSFER_TOPIC = (
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -135,11 +140,7 @@ if not WEBAPP_URL:
     logger.warning("⚠️  WEBAPP_URL не задан — кнопка Connect Wallet будет недоступна")
 
 # ---------------------------------------------------------------------------
-<<<<<<< HEAD
 # СТРУКТУРА БД
-=======
-# СТРУКТУРА БД И ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 # ---------------------------------------------------------------------------
 
 _DB_DEFAULT: dict = {
@@ -152,14 +153,9 @@ _DB_DEFAULT: dict = {
 
 db: dict = {}
 
-<<<<<<< HEAD
 # ---------------------------------------------------------------------------
 # ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
 # ---------------------------------------------------------------------------
-=======
-# ОПТИМИЗАЦИЯ 1: Быстрый поиск юзера по nonce за O(1)
-_pending_by_nonce: dict[str, int] = {}
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 
 pool: Optional[asyncpg.Pool] = None
 http_session: Optional[aiohttp.ClientSession] = None
@@ -197,10 +193,7 @@ STATE_TTL = 600
 def esc(text: str) -> str:
     return html.escape(str(text))
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 def get_state(uid: int) -> Optional[str]:
     e = _user_states.get(uid)
     if not e:
@@ -210,7 +203,6 @@ def get_state(uid: int) -> Optional[str]:
         return None
     return e["state"]
 
-<<<<<<< HEAD
 
 def set_state(uid: int, state: str) -> None:
     _user_states[uid] = {"state": state, "ts": time.time()}
@@ -220,69 +212,10 @@ def clear_state(uid: int) -> None:
     _user_states.pop(uid, None)
 
 
-# ---------------------------------------------------------------------------
-# МУЛЬТИПОДПИСИ И GOVERNANCE
-# ---------------------------------------------------------------------------
-
-_pending_actions: dict[str, dict] = {}
-
-def create_action_id(action_type: str, target: str) -> str:
-    return f"{action_type}:{target}:{int(time.time())}"
-
-async def require_multisig(action_type: str, target: str, initiator: int) -> tuple[bool, str]:
-    if len(OWNERS) == 1:
-        return True, "Одиночный владелец - действие выполнено"
-    
-    action_id = create_action_id(action_type, target)
-    
-    async with db_lock:
-        _pending_actions[action_id] = {
-            "type": action_type,
-            "target": target,
-            "initiator": initiator,
-            "confirmations": {initiator},
-            "required": MULTISIG_THRESHOLD,
-            "ts": time.time()
-        }
-    
-    await save_db()
-    return False, f"Требуется {MULTISIG_THRESHOLD} подтверждений. Получено: 1/{MULTISIG_THRESHOLD}"
-
-async def confirm_action(action_id: str, user_id: int) -> tuple[bool, str]:
-    async with db_lock:
-        action = _pending_actions.get(action_id)
-        if not action:
-            return False, "Действие не найдено"
-        
-        if user_id in action["confirmations"]:
-            return False, "Вы уже подтвердили это действие"
-        
-        action["confirmations"].add(user_id)
-        
-        if len(action["confirmations"]) >= action["required"]:
-            # Достаточно подтверждений - выполняем действие
-            del _pending_actions[action_id]
-            await save_db()
-            return True, f"Действие подтверждено ({len(action['confirmations'])}/{action['required']})"
-        
-        await save_db()
-        return False, f"Подтверждено: {len(action['confirmations'])}/{action['required']}"
-
 def is_owner(uid: int) -> bool:
     return uid in OWNERS
 
 
-=======
-def set_state(uid: int, state: str) -> None:
-    _user_states[uid] = {"state": state, "ts": time.time()}
-
-def clear_state(uid: int) -> None:
-    _user_states.pop(uid, None)
-
-def is_owner(uid: int) -> bool:
-    return uid in OWNERS
-
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 # ---------------------------------------------------------------------------
 # POSTGRESQL
 # ---------------------------------------------------------------------------
@@ -306,17 +239,7 @@ async def init_db() -> None:
                 db["cfg"]["limit_usd"] = LIMIT_MIN_USD
             db.setdefault("connected_wallets", {})
             db.setdefault("pending_verifications", {})
-<<<<<<< HEAD
             logger.info("✅ БД загружена")
-=======
-            
-            # ОПТИМИЗАЦИЯ 2: НАПОЛНЕНИЕ ИНДЕКСА ПРИ СТАРТЕ
-            for uid_str, p in db["pending_verifications"].items():
-                if time.time() - p.get("ts", 0) < STATE_TTL:
-                    _pending_by_nonce[p["nonce"]] = int(uid_str)
-            
-            logger.info(f"✅ БД загружена. Активных сессий в индексе: {len(_pending_by_nonce)}")
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
         else:
             import copy
             db = copy.deepcopy(_DB_DEFAULT)
@@ -326,10 +249,7 @@ async def init_db() -> None:
             )
             logger.info("🆕 Создана новая БД")
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def save_db() -> None:
     if not pool:
         return
@@ -348,14 +268,9 @@ async def save_db() -> None:
                 await asyncio.sleep(2 ** attempt)
     logger.error("❌ save_db: все 3 попытки провалились")
 
-<<<<<<< HEAD
 
 # ---------------------------------------------------------------------------
 # ЦЕНЫ
-=======
-# ---------------------------------------------------------------------------
-# ЦЕНЫ И RPC
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 # ---------------------------------------------------------------------------
 
 async def _fetch_bnb_price() -> float:
@@ -373,10 +288,7 @@ async def _fetch_bnb_price() -> float:
         logger.warning(f"BNB price fetch error: {e}")
     return 600.0  # fallback
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def _fetch_token_price(token_addr: str) -> float:
     try:
         timeout = aiohttp.ClientTimeout(total=8)
@@ -393,10 +305,7 @@ async def _fetch_token_price(token_addr: str) -> float:
         logger.warning(f"Token price fetch error {token_addr[:10]}: {e}")
     return 0.0
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def refresh_bnb_price() -> None:
     global _price_cache_ts
     async with price_lock:
@@ -407,18 +316,12 @@ async def refresh_bnb_price() -> None:
         _price_cache_ts = time.time()
         logger.info(f"💰 BNB = ${price:.2f}")
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def bnb_to_usd(bnb: float) -> float:
     await refresh_bnb_price()
     return bnb * _price_cache.get("BNB", 600.0)
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def token_to_usd(token_addr: str, raw: int, decimals: int) -> float:
     amount = raw / (10 ** decimals)
     now = time.time()
@@ -429,49 +332,22 @@ async def token_to_usd(token_addr: str, raw: int, decimals: int) -> float:
         cached = (price, now)
     return amount * cached[0]
 
-<<<<<<< HEAD
 
 # ---------------------------------------------------------------------------
 # RPC
 # ---------------------------------------------------------------------------
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def rpc(payload: dict) -> dict:
     timeout = aiohttp.ClientTimeout(total=12)
     async with rpc_sem:
         last_error = None
-<<<<<<< HEAD
-        # Пробуем все RPC включая резервные
-        for url in ALL_RPC_URLS:
-=======
         for url in HTTP_URLS:
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
             try:
                 async with http_session.post(url, json=payload, timeout=timeout) as r:
                     if r.status == 429:
                         last_error = "RPC 429"
                         continue
                     r.raise_for_status()
-<<<<<<< HEAD
-                    result = await r.json()
-                    # Логируем успешный RPC для мониторинга
-                    if url in FALLBACK_RPCS:
-                        logger.info(f"✅ Fallback RPC работает: {url}")
-                    return result
-            except Exception as e:
-                last_error = str(e)
-                # Если основной RPC не работает, пробуем резервные
-                if url in HTTP_URLS and HTTP_URLS.index(url) == 0:
-                    logger.warning(f"🔴 Основной RPC недоступен, переключаемся на резервные")
-                continue
-        
-        if last_error == "RPC 429":
-            raise RuntimeError("RPC 429 - все узлы перегружены")
-        raise RuntimeError(f"Все RPC узлы недоступны. Последняя ошибка: {last_error}")
-
-
-=======
                     return await r.json()
             except Exception as e:
                 last_error = str(e)
@@ -480,7 +356,7 @@ async def rpc(payload: dict) -> dict:
             raise RuntimeError("RPC 429")
         raise RuntimeError(f"Все RPC узлы недоступны. Последняя ошибка: {last_error}")
 
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
+
 async def get_block(number: int) -> Optional[dict]:
     try:
         data = await rpc({
@@ -492,10 +368,7 @@ async def get_block(number: int) -> Optional[dict]:
         logger.warning(f"get_block {number}: {e}")
         return None
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def get_logs(from_bn: int, to_bn: int) -> list[dict]:
     try:
         data = await rpc({
@@ -512,10 +385,7 @@ async def get_logs(from_bn: int, to_bn: int) -> list[dict]:
         logger.warning(f"get_logs {from_bn}-{to_bn}: {e}")
         return []
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def get_decimals(token_addr: str) -> int:
     if token_addr in _decimals_cache:
         return _decimals_cache[token_addr]
@@ -532,14 +402,9 @@ async def get_decimals(token_addr: str) -> int:
     _decimals_cache[token_addr] = dec
     return dec
 
-<<<<<<< HEAD
 
 # ---------------------------------------------------------------------------
 # ON-CHAIN ЛОГИРОВАНИЕ (только для китов)
-=======
-# ---------------------------------------------------------------------------
-# ON-CHAIN ЛОГИРОВАНИЕ & AI & SCAM CHECK
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 # ---------------------------------------------------------------------------
 
 _SCAN_ABI = [{
@@ -590,13 +455,10 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
         logger.warning(f"On-chain log failed: {str(e)[:100]}")
 
 
-<<<<<<< HEAD
 # ---------------------------------------------------------------------------
 # AI
 # ---------------------------------------------------------------------------
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def call_ai(prompt: str) -> str:
     configs = (
         [("xai",    k) for k in XAI_KEYS]  +
@@ -613,24 +475,11 @@ async def call_ai(prompt: str) -> str:
                 if result:
                     return esc(result)
             except Exception as e:
-<<<<<<< HEAD
-                # Безопасное логирование без утечки ключей
-                error_msg = str(e)
-                # Маскируем потенциальные ключи в логах
-                masked_error = error_msg
-                for key_pattern in ["api_key", "private", "secret", "token"]:
-                    masked_error = masked_error.replace(key_pattern, "***")
-                logger.warning(f"AI [{provider}] error: {masked_error[:100]}")
-
-    return "Все AI-провайдеры временно недоступны."
-
-
-=======
                 logger.warning(f"AI [{provider}] error: {e}")
 
     return "Все AI-провайдеры временно недоступны."
 
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
+
 async def _ai_request(provider: str, key: str, prompt: str) -> Optional[str]:
     timeout = aiohttp.ClientTimeout(total=20)
 
@@ -676,14 +525,11 @@ async def _ai_request(provider: str, key: str, prompt: str) -> Optional[str]:
         raise RuntimeError("Gemini: неверный формат ответа")
     return data.get("choices", [{}])[0].get("message", {}).get("content") or ""
 
-<<<<<<< HEAD
 
 # ---------------------------------------------------------------------------
 # СКАМ-ПРОВЕРКА
 # ---------------------------------------------------------------------------
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def check_scam(addr: str) -> list[str]:
     if not Web3.is_address(addr):
         return []
@@ -712,10 +558,7 @@ async def check_scam(addr: str) -> list[str]:
         logger.warning(f"GoPlus error {addr[:10]}: {e}")
         return []
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 # ---------------------------------------------------------------------------
 # TELEGRAM УТИЛИТЫ
 # ---------------------------------------------------------------------------
@@ -727,20 +570,14 @@ async def safe_send(chat_id: int, text: str, **kwargs) -> None:
         except Exception as e:
             logger.warning(f"safe_send → {chat_id}: {e}")
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 async def notify_owners(text: str) -> None:
     await asyncio.gather(
         *[safe_send(uid, text) for uid in OWNERS],
         return_exceptions=True,
     )
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 def _wallet_watchers(address: str) -> list[int]:
     addr = address.lower()
     result = []
@@ -749,23 +586,16 @@ def _wallet_watchers(address: str) -> list[int]:
             result.append(int(uid_str))
     return result
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 def _is_connected_wallet(address: str) -> bool:
     addr = address.lower()
     for wallets in db.get("connected_wallets", {}).values():
         if any(w["address"].lower() == addr for w in wallets):
             return True
     return False
-<<<<<<< HEAD
 
 
 # ---------------------------------------------------------------------------
-=======
-    # ---------------------------------------------------------------------------
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 # ОБРАБОТКА BNB-ТРАНЗАКЦИЙ
 # ---------------------------------------------------------------------------
 
@@ -1030,15 +860,9 @@ async def monitor() -> None:
                     else:
                         await log_queue.put(log)
 
-<<<<<<< HEAD
             async with db_lock:
                 db["stats"]["blocks"] += to_proc
                 db["last_block"]       = end_bn
-=======
-                async with db_lock:
-                    db["stats"]["blocks"] += to_proc
-                    db["last_block"]       = end_bn
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
 
             save_counter += to_proc
             if save_counter >= SAVE_EVERY:
@@ -1064,19 +888,6 @@ async def monitor() -> None:
 async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[bool, str]:
     uid_str = str(user_id)
 
-<<<<<<< HEAD
-    # Валидация входных данных
-    if not isinstance(user_id, int) or user_id <= 0:
-        return False, "Невалидный ID пользователя"
-    
-    if not isinstance(address, str) or len(address) != 42 or not address.startswith('0x'):
-        return False, "Невалидный формат адреса кошелька"
-    
-    if not isinstance(signature, str) or len(signature) < 130:
-        return False, "Невалидный формат подписи"
-
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
     if not Web3.is_address(address):
         return False, "Невалидный адрес кошелька"
 
@@ -1095,7 +906,8 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
     message = f"VibeGuard verification: {nonce}"
 
     try:
-        w3_local    = Web3()
+        # УМНОЕ ПОДКЛЮЧЕНИЕ К БЛОКЧЕЙНУ - автоматическое переключение
+        w3_local = get_smart_w3(_RAW_HTTP_URL)
         msg_defunct = encode_defunct(text=message)
         recovered   = w3_local.eth.account.recover_message(
             msg_defunct, signature=signature
@@ -1199,19 +1011,13 @@ def get_main_menu_keyboard():
 @bot.message_handler(commands=["start"])
 async def cmd_start(m: types.Message) -> None:
     clear_state(m.from_user.id)
-<<<<<<< HEAD
     # Убираем reply-клавиатуру, если она была
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
     await bot.send_message(
         m.chat.id,
         "🔄 Очищаем клавиатуру...",
         reply_markup=types.ReplyKeyboardRemove()
     )
-<<<<<<< HEAD
     # Отправляем основное меню
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
     await bot.send_message(
         m.chat.id,
         (
@@ -1235,15 +1041,8 @@ async def cmd_connect(m: types.Message) -> None:
             "ts": time.time(),
         }
     await save_db()
-<<<<<<< HEAD
 
     # Формируем URL с параметрами startapp и wc_project_id
-=======
-    
-    # ОПТИМИЗАЦИЯ O(1): РЕГИСТРИРУЕМ В БЫСТРОМ ИНДЕКСЕ
-    _pending_by_nonce[nonce] = uid
-
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
     parts = [f"startapp={nonce}", f"wc_project_id={REOWN_PROJECT_ID}"]
     if BOT_PUBLIC_URL:
         parts.append(f"api={BOT_PUBLIC_URL}/webapp/connect")
@@ -1277,19 +1076,13 @@ async def handle_webapp_data(m: types.Message) -> None:
     logger.info(f"📩 Получены web_app_data от пользователя {uid}")
     
     try:
-<<<<<<< HEAD
         # Парсим JSON из WebApp
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
         raw_data = m.web_app_data.data
         data = json.loads(raw_data)
         
         address = data.get("address", "").strip()
         sig = data.get("signature", "").strip()
-<<<<<<< HEAD
         # Этот nonce критически важен для связи сессии!
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
         nonce_from_app = data.get("nonce", "").strip() 
         
         logger.info(f"📦 Данные: address={address[:10]}..., nonce={nonce_from_app[:8]}...")
@@ -1303,10 +1096,7 @@ async def handle_webapp_data(m: types.Message) -> None:
         await safe_send(uid, "❌ Неполные данные от WebApp.")
         return
 
-<<<<<<< HEAD
     # Запускаем верификацию (она проверит подпись и nonce)
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
     success, message = await verify_wallet(uid, address, sig)
 
     if success:
@@ -1317,10 +1107,7 @@ async def handle_webapp_data(m: types.Message) -> None:
             f"<code>{esc(address.lower())}</code>\n\n"
             f"Теперь ты получаешь личные алерты о всех транзакциях этого адреса.",
         )
-<<<<<<< HEAD
         # Принудительно сохраняем БД, чтобы кошелек не пропал после рестарта
-=======
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
         await save_db()
     else:
         logger.warning(f"❌ Ошибка верификации для {uid}: {message}")
@@ -1348,15 +1135,10 @@ async def handle_menu_callback(c: types.CallbackQuery):
 
     if action == "mywallets":
         await bot.answer_callback_query(c.id)
-<<<<<<< HEAD
         # Показываем список кошельков новым сообщением
         await cmd_mywallets(message)
     elif action == "connect":
         # Генерируем nonce и редактируем текущее сообщение
-=======
-        await cmd_mywallets(message)
-    elif action == "connect":
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
         await bot.answer_callback_query(c.id)
         nonce = secrets.token_hex(16)
         async with db_lock:
@@ -1365,13 +1147,6 @@ async def handle_menu_callback(c: types.CallbackQuery):
                 "ts": time.time(),
             }
         await save_db()
-<<<<<<< HEAD
-=======
-        
-        # ОПТИМИЗАЦИЯ O(1): РЕГИСТРИРУЕМ В БЫСТРОМ ИНДЕКСЕ
-        _pending_by_nonce[nonce] = user_id
-        
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
         parts = [f"startapp={nonce}", f"wc_project_id={REOWN_PROJECT_ID}"]
         if BOT_PUBLIC_URL:
             parts.append(f"api={BOT_PUBLIC_URL}/webapp/connect")
@@ -1469,6 +1244,51 @@ async def cb_disconnect(c: types.CallbackQuery) -> None:
 async def cb_connect_new(c: types.CallbackQuery) -> None:
     await bot.answer_callback_query(c.id)
     await cmd_connect(c.message)
+
+
+# ---------------------------------------------------------------------------
+# ОБРАБОТКА ДАННЫХ FROM WEBAPP
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(content_types=["web_app_data"])
+async def handle_webapp_data(m: types.Message) -> None:
+    """
+    Telegram отправляет результат WebApp сюда.
+    WebApp передаёт JSON: {"address": "0x...", "signature": "0x...", "nonce": "..."}
+    """
+    uid = m.from_user.id
+    logger.info(f"📥 Получены данные WebApp от user_id={uid}")
+    
+    try:
+        data = json.loads(m.web_app_data.data)
+        address = data.get("address", "").strip()
+        sig = data.get("signature", "").strip()
+        nonce = data.get("nonce", "").strip()
+        
+        logger.info(f"📥 WebApp данные: address={address[:8]}..., nonce={nonce[:8]}...")
+    except Exception as e:
+        logger.warning(f"webapp_data parse error uid={uid}: {e}")
+        await safe_send(uid, "❌ Ошибка данных от WebApp. Попробуй ещё раз.")
+        return
+
+    if not address or not sig or not nonce:
+        await safe_send(uid, "❌ Неполные данные от WebApp.")
+        return
+
+    success, message = await verify_wallet(uid, address, sig)
+
+    if success:
+        await safe_send(
+            uid,
+            f"✅ <b>Кошелёк подключён!</b>\n"
+            f"<code>{esc(address.lower())}</code>\n\n"
+            f"Теперь ты получаешь личные алерты о всех транзакциях "
+            f"этого адреса.",
+        )
+        logger.info(f"✅ Кошелёк подключён: {address[:8]}... для user_id={uid}")
+    else:
+        await safe_send(uid, f"❌ {esc(message)}")
+        logger.warning(f"❌ Ошибка подключения кошелька: {message}")
 
 
 # ---------------------------------------------------------------------------
@@ -1776,7 +1596,6 @@ async def _run_health_server() -> None:
         if not nonce or not address or not signature:
             return web.json_response({"ok": False, "error": "missing fields"}, status=400, headers=cors_headers)
 
-<<<<<<< HEAD
         uid: Optional[int] = None
         async with db_lock:
             for uid_str, p in db.get("pending_verifications", {}).items():
@@ -1788,25 +1607,10 @@ async def _run_health_server() -> None:
                     break
 
         if uid is None:
-=======
-        # ОПТИМИЗАЦИЯ O(1): Ищем юзера мгновенно по nonce из нашего словаря
-        uid = _pending_by_nonce.get(nonce)
-
-        if uid is None:
-            # Если в индексе нет, на всякий случай проверяем старым методом (медленным)
-            async with db_lock:
-                for uid_str, p in db.get("pending_verifications", {}).items():
-                    if str(p.get("nonce", "")) == nonce:
-                        uid = int(uid_str)
-                        break
-        
-        if uid is None:
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
             return web.json_response({"ok": False, "error": "session not found"}, status=404, headers=cors_headers)
 
         success, message = await verify_wallet(uid, address, signature)
         if success:
-<<<<<<< HEAD
             await safe_send(
                 uid,
                 f"✅ <b>Кошелёк подключён!</b>\n"
@@ -1814,9 +1618,6 @@ async def _run_health_server() -> None:
                 f"Теперь ты получаешь личные алерты о всех транзакциях "
                 f"этого адреса.",
             )
-=======
-            _pending_by_nonce.pop(nonce, None) # Удаляем использованный nonce
->>>>>>> 32041dadbba800374d6fe9e80f8b24cbf228255e
             return web.json_response({"ok": True}, headers=cors_headers)
 
         return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
