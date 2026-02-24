@@ -194,8 +194,9 @@ async def verify_wallet(user_id, address, signature):
         # ПЕРЕЗАПИСЬ: Всегда оставляем только один кошелек
         db["connected_wallets"][uid_str] = [{"address": address.lower(), "label": "Main Wallet"}]
         db["pending_verifications"].pop(uid_str, None)
+
     await save_db()
-    return True, "✅ Кошелёк привязан"
+    return True, "✅ Кошелёк успешно привязан"
 
 # ---------------------------------------------------------------------------
 # ОСТАЛЬНАЯ ЛОГИКА (AI, МОНИТОРИНГ, КОМАНДЫ)
