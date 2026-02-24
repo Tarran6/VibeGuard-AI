@@ -19,7 +19,7 @@ from asyncio import Lock, Queue, Semaphore
 from typing import Optional
 
 import aiohttp
-import asyncpg
+import aiosqlite
 from dotenv import load_dotenv
 from eth_account.messages import encode_defunct
 from telebot import types
@@ -51,8 +51,13 @@ def _optional(key: str, default: str = "") -> str:
 
 
 # Обязательные
-TELEGRAM_TOKEN   = _require("TELEGRAM_TOKEN")
-DATABASE_URL      = _require("DATABASE_URL")
+# Временно для теста - ЗАМЕНИТЬ НА РЕАЛЬНЫЙ ТОКЕН!
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz") 
+if TELEGRAM_TOKEN == "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz":
+    print("❌ Вставьте реальный TELEGRAM_TOKEN в .env файл!")
+    print("📍 Формат: 1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789")
+    exit(1)
+DATABASE_URL      = _optional("DATABASE_URL", "sqlite:///vibeguard.db")
 PRIMARY_OWNER_ID = int(_require("PRIMARY_OWNER_ID"))
 
 # Парсинг пула RPC ссылок с резервными узлами
@@ -82,7 +87,7 @@ def get_smart_w3(url_string):
     for url in urls:
         try:
             if url.startswith('http'):
-                provider = Web3.HTTPProvider(url, request_kwargs={'timeout': 10})
+                provider = Web3.HTTPProvider(url, request_kwargs={'timeout': 3})
             elif url.startswith('ws'):
                 provider = Web3.WebsocketProvider(url)
             else:
@@ -158,7 +163,7 @@ db: dict = {}
 # ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
 # ---------------------------------------------------------------------------
 
-pool: Optional[asyncpg.Pool] = None
+pool: Optional[aiosqlite.Connection] = None
 http_session: Optional[aiohttp.ClientSession] = None
 start_time = time.time()
 
@@ -218,20 +223,20 @@ def is_owner(uid: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# POSTGRESQL
+# SQLITE
 # ---------------------------------------------------------------------------
 
 async def init_db() -> None:
     global pool, db
-    pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "CREATE TABLE IF NOT EXISTS bot_data "
-            "(id INTEGER PRIMARY KEY, data JSONB NOT NULL)"
-        )
-        row = await conn.fetchrow("SELECT data FROM bot_data WHERE id = 1")
+    pool = await aiosqlite.connect("vibeguard.db")
+    await pool.execute(
+        "CREATE TABLE IF NOT EXISTS bot_data "
+        "(id INTEGER PRIMARY KEY, data TEXT NOT NULL)"
+    )
+    async with pool.execute("SELECT data FROM bot_data WHERE id = 1") as cursor:
+        row = await cursor.fetchone()
         if row:
-            raw_data = row["data"]
+            raw_data = row[0]
             loaded = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
             db = {**_DB_DEFAULT, **loaded}
             db["stats"] = {**_DB_DEFAULT["stats"], **loaded.get("stats", {})}
@@ -244,9 +249,9 @@ async def init_db() -> None:
         else:
             import copy
             db = copy.deepcopy(_DB_DEFAULT)
-            await conn.execute(
-                "INSERT INTO bot_data (id, data) VALUES (1, $1)",
-                json.dumps(db),
+            await pool.execute(
+                "INSERT INTO bot_data (id, data) VALUES (1, ?)",
+                (json.dumps(db),),  # <-- Кортеж с одним элементом
             )
             logger.info("🆕 Создана новая БД")
 
@@ -256,12 +261,12 @@ async def save_db() -> None:
         return
     for attempt in range(3):
         try:
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "INSERT INTO bot_data (id, data) VALUES (1, $1) "
-                    "ON CONFLICT (id) DO UPDATE SET data = $1",
-                    json.dumps(db),
-                )
+            data_json = json.dumps(db)
+            await pool.execute(
+                "INSERT OR REPLACE INTO bot_data (id, data) VALUES (1, ?)",
+                (data_json,),  # <-- Передаем как кортеж с одним элементом
+            )
+            await pool.commit()
             return
         except Exception as e:
             logger.warning(f"save_db попытка {attempt+1}/3: {e}")
@@ -1628,6 +1633,187 @@ async def graceful_shutdown(sig_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# APPROVE SCANNING
+# ---------------------------------------------------------------------------
+
+async def scan_approvals(address: str) -> list[dict]:
+    """Сканирует approve разрешения для адреса"""
+    try:
+        # Получаем все трансферы токенов (ERC20 Transfer)
+        logs = await rpc({
+            "jsonrpc": "2.0",
+            "method": "eth_getLogs",
+            "params": [{
+                "fromBlock": "0x0",
+                "toBlock": "latest",
+                "address": None,  # Все адреса
+                "topics": [
+                    "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",  # Transfer(topic0)
+                    None,  # from (topic1)
+                    None,  # to (topic2)
+                ]
+            }],
+            "id": 1
+        })
+        
+        # Находим токены, которыми владел пользователь
+        user_tokens = set()
+        for log in logs.get("result", []):
+            topics = log.get("topics", [])
+            if len(topics) >= 3:
+                to_addr = "0x" + topics[2][-40:]  # Получаем to адрес из topic2
+                if to_addr.lower() == address.lower():
+                    token_addr = log.get("address", "")
+                    user_tokens.add(token_addr.lower())
+        
+        # Теперь сканируем approve для этих токенов
+        approvals = []
+        for token_addr in user_tokens:
+            try:
+                # Получаем все approve для этого токена
+                approve_logs = await rpc({
+                    "jsonrpc": "2.0",
+                    "method": "eth_getLogs",
+                    "params": [{
+                        "fromBlock": "0x0",
+                        "toBlock": "latest",
+                        "address": token_addr,
+                        "topics": [
+                            "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925",  # Approval(topic0)
+                            None,  # owner (topic1)
+                            None,  # spender (topic2)
+                        ]
+                    }],
+                    "id": 1
+                })
+                
+                for log in approve_logs.get("result", []):
+                    topics = log.get("topics", [])
+                    if len(topics) >= 3:
+                        owner = "0x" + topics[1][-40:]
+                        spender = "0x" + topics[2][-40:]
+                        
+                        if owner.lower() == address.lower():
+                            # Получаем данные из log.data
+                            data = log.get("data", "0x")
+                            if len(data) >= 66:  # 0x + 32 bytes
+                                amount = int(data[-64:], 16)
+                                
+                                # Проверяем если allowance > 0
+                                if amount > 0:
+                                    # Получаем информацию о токене
+                                    token_info = await get_token_info(token_addr)
+                                    
+                                    # Проверяем spender на скам
+                                    spender_risks = await check_scam(spender)
+                                    
+                                    approvals.append({
+                                        "tokenAddress": token_addr,
+                                        "tokenName": token_info.get("name", "Unknown"),
+                                        "tokenSymbol": token_info.get("symbol", "???"),
+                                        "spenderAddress": spender,
+                                        "amount": amount,
+                                        "amountFormatted": format_amount(amount, token_info.get("decimals", 18)),
+                                        "risk": "high" if spender_risks else "medium",
+                                        "risks": spender_risks,
+                                        "txHash": log.get("transactionHash", ""),
+                                        "blockNumber": int(log.get("blockNumber", "0x0"), 16)
+                                    })
+            except Exception as e:
+                logger.warning(f"Error scanning token {token_addr}: {e}")
+                continue
+        
+        # Сортируем по риску и дате
+        approvals.sort(key=lambda x: (x["risk"] != "high", -x["blockNumber"]))
+        return approvals[:20]  # Возвращаем топ 20
+        
+    except Exception as e:
+        logger.error(f"scan_approvals error: {e}")
+        return []
+
+async def get_token_info(token_addr: str) -> dict:
+    """Получает информацию о токене"""
+    try:
+        # Пробуем получить name и symbol
+        name_result = await rpc({
+            "jsonrpc": "2.0",
+            "method": "eth_call",
+            "params": [{
+                "to": token_addr,
+                "data": "0x06fdde03"  # name()
+            }, "latest"],
+            "id": 1
+        })
+        
+        symbol_result = await rpc({
+            "jsonrpc": "2.0",
+            "method": "eth_call",
+            "params": [{
+                "to": token_addr,
+                "data": "0x95d89b41"  # symbol()
+            }, "latest"],
+            "id": 1
+        })
+        
+        decimals_result = await rpc({
+            "jsonrpc": "2.0",
+            "method": "eth_call",
+            "params": [{
+                "to": token_addr,
+                "data": "0x313ce567"  # decimals()
+            }, "latest"],
+            "id": 1
+        })
+        
+        def decode_hex_string(hex_str):
+            if hex_str.startswith("0x"):
+                hex_str = hex_str[2:]
+            if len(hex_str) >= 64:
+                hex_str = hex_str[64:]
+            try:
+                return bytes.fromhex(hex_str).decode('utf-8').rstrip('\x00')
+            except:
+                return ""
+        
+        name = decode_hex_string(name_result.get("result", "0x"))
+        symbol = decode_hex_string(symbol_result.get("result", "0x"))
+        
+        decimals_hex = decimals_result.get("result", "0x")
+        if decimals_hex.startswith("0x"):
+            decimals = int(decimals_hex, 16)
+        else:
+            decimals = 18
+            
+        return {
+            "name": name or "Unknown Token",
+            "symbol": symbol or "???",
+            "decimals": decimals
+        }
+        
+    except Exception as e:
+        logger.warning(f"get_token_info error for {token_addr}: {e}")
+        return {"name": "Unknown", "symbol": "???", "decimals": 18}
+
+def format_amount(amount: int, decimals: int) -> str:
+    """Форматирует количество токенов"""
+    try:
+        if amount == 115792089237316195423570985008687907853269984665640564039457584007913129639935:
+            return "Unlimited"
+        
+        value = amount / (10 ** decimals)
+        
+        if value >= 1000000:
+            return f"{value/1000000:.1f}M"
+        elif value >= 1000:
+            return f"{value/1000:.1f}K"
+        elif value >= 1:
+            return f"{value:.2f}"
+        else:
+            return f"{value:.6f}"
+    except:
+        return str(amount)
+
+# ---------------------------------------------------------------------------
 # HEALTH SERVER (POST /webapp/connect)
 # ---------------------------------------------------------------------------
 
@@ -1683,6 +1869,104 @@ async def _run_health_server() -> None:
 
         return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
 
+    async def handle_approvals(request):
+        """API endpoint для сканирования approve"""
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
+
+        address = str(payload.get("address", "")).strip()
+        
+        if not address or not Web3.is_address(address):
+            return web.json_response({"ok": False, "error": "invalid address"}, status=400, headers=cors_headers)
+        
+        try:
+            approvals = await scan_approvals(address)
+            return web.json_response({"ok": True, "approvals": approvals}, headers=cors_headers)
+        except Exception as e:
+            logger.error(f"handle_approvals error: {e}")
+            return web.json_response({"ok": False, "error": "scan failed"}, status=500, headers=cors_headers)
+
+    async def handle_webapp_approvals(request):
+        """API endpoint для сканирования approve с GoPlus"""
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
+
+        address = str(payload.get("address", "")).strip()
+        
+        if not address or not Web3.is_address(address):
+            return web.json_response({"ok": False, "error": "invalid address"}, status=400, headers=cors_headers)
+        
+        try:
+            # Получаем данные из GoPlus API
+            async with http_session.get(
+                f"https://api.gopluslabs.io/api/v1/token_approvals?chain_id=204&user_address={address}"
+            ) as resp:
+                if resp.status != 200:
+                    raise Exception("GoPlus API error")
+                
+                goplus_data = await resp.json()
+                
+                if goplus_data.get("code") != 1:
+                    raise Exception("GoPlus API returned error")
+                
+                result_data = goplus_data.get("result", {})
+                approvals = []
+                
+                # Обрабатываем токены с approve
+                for token_addr, token_data in result_data.items():
+                    if token_addr.startswith("0x") and token_data:
+                        # Проверяем есть ли approve permissions
+                        allowance = token_data.get("allowance", "0")
+                        if allowance and allowance != "0" and allowance != "null":
+                            # Получаем информацию о токене
+                            token_name = token_data.get("token_name", "Unknown")
+                            token_symbol = token_data.get("symbol", "???")
+                            token_decimal = int(token_data.get("token_decimal", "18"))
+                            
+                            # Форматируем количество
+                            try:
+                                amount = int(allowance, 16) if allowance.startswith("0x") else int(allowance)
+                                amount_formatted = format_amount(amount, token_decimal)
+                            except:
+                                amount_formatted = "Unknown"
+                            
+                            # Проверяем риски
+                            risks = []
+                            if token_data.get("is_scam", "0") == "1":
+                                risks.append("SCAM")
+                            if token_data.get("is_honeypot", "0") == "1":
+                                risks.append("HONEYPOT")
+                            if token_data.get("is_anti_scam", "0") == "1":
+                                risks.append("ANTI_SCAM")
+                            
+                            # Определяем уровень риска
+                            risk_level = "high" if risks else "medium"
+                            
+                            approvals.append({
+                                "tokenAddress": token_addr,
+                                "tokenName": token_name,
+                                "tokenSymbol": token_symbol,
+                                "spenderAddress": token_data.get("spender", "Unknown"),
+                                "amount": allowance,
+                                "amountFormatted": amount_formatted,
+                                "risk": risk_level,
+                                "risks": risks,
+                                "logoURL": token_data.get("logo_url", "")
+                            })
+                
+                # Сортируем по риску (high вначале)
+                approvals.sort(key=lambda x: (x["risk"] != "high"))
+                
+                return web.json_response({"ok": True, "approvals": approvals}, headers=cors_headers)
+                
+        except Exception as e:
+            logger.error(f"handle_webapp_approvals error: {e}")
+            return web.json_response({"ok": False, "error": "scan failed"}, status=500, headers=cors_headers)
+
     async def handle_webapp_connect_options(_):
         return web.Response(status=204, headers=cors_headers)
 
@@ -1690,6 +1974,8 @@ async def _run_health_server() -> None:
     app.router.add_get("/", handle)
     app.router.add_options("/webapp/connect", handle_webapp_connect_options)
     app.router.add_post("/webapp/connect", handle_webapp_connect)
+    app.router.add_options("/webapp/approvals", handle_webapp_connect_options)
+    app.router.add_post("/webapp/approvals", handle_webapp_approvals)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
@@ -1743,15 +2029,17 @@ async def main() -> None:
 
     # БД
     await init_db()
-    logger.info("✅ PostgreSQL подключена")
+    logger.info("✅ SQLite подключена")
 
     try:
-        w3 = get_smart_w3(_RAW_HTTP_URL)
-        chain_id = w3.eth.chain_id
-        if chain_id != 204:
-            logger.error(f"❌ Неверная сеть! Ожидается opBNB (204), получено {chain_id}")
-        else:
-            logger.info("✅ Умное подключение к opBNB Mainnet установлено")
+        # ВРЕМЕННО: пропускаем проверку блокчейна для быстрого старта
+        logger.info("⚡ Быстрый старт без проверки блокчейна")
+        # w3 = get_smart_w3(_RAW_HTTP_URL)
+        # chain_id = w3.eth.chain_id
+        # if chain_id != 204:
+        #     logger.error(f"❌ Неверная сеть! Ожидается opBNB (204), получено {chain_id}")
+        # else:
+        #     logger.info("✅ Умное подключение к opBNB Mainnet установлено")
     except Exception as e:
         logger.warning(f"Не удалось проверить chainId: {e}")
 
