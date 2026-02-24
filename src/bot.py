@@ -163,7 +163,7 @@ db: dict = {}
 # ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
 # ---------------------------------------------------------------------------
 
-pool: Optional[aiosqlite.Connection] = None
+pool: Optional[asyncpg.Pool] = None
 http_session: Optional[aiohttp.ClientSession] = None
 start_time = time.time()
 
