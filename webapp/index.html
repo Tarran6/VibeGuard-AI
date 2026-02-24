@@ -177,13 +177,26 @@ async function secureConnect() {
                 result.approvals.forEach(app => {
                     const item = document.createElement('div');
                     item.className = 'approval-item';
-                    item.style.borderLeftColor = '#ef4444'; // Все高风险 - красные
+                    
+                    // Цвет рамки в зависимости от риска
+                    const borderColor = app.risk === 'high' ? '#ef4444' : '#f59e0b';
+                    item.style.borderLeftColor = borderColor;
+                    
+                    // Форматируем amount
+                    const amount = app.amount === '115792089237316195423570985008687907853269984665640564039457584007913129639935' 
+                        ? '∞ (Unlimited)' 
+                        : app.amount;
+                    
+                    // Текст риска
+                    const riskText = app.risk === 'high' ? '🚨 ВЫСОКИЙ РИСК' : '⚠️ НИЗКИЙ РИСК';
+                    const riskClass = app.risk === 'high' ? 'high' : 'low';
                     
                     item.innerHTML = `
                         <div class="approval-info">
                             <strong>${app.tokenName}</strong>
                             <span class="spender">Доступ у: ${app.spenderAddress.substring(0,8)}...${app.spenderAddress.substring(36)}</span>
-                            <span class="risk-badge high">🚨 ВЫСОКИЙ РИСК</span>
+                            <span class="amount">Лимит: ${amount}</span>
+                            <span class="risk-badge ${riskClass}">${riskText}</span>
                         </div>
                         <button class="btn-revoke" onclick="window.revokeAccess('${app.tokenAddress}', '${app.spenderAddress}')">Revoke</button>
                     `;
@@ -233,6 +246,8 @@ async function secureConnect() {
     .btn-revoke { background: #ef4444; color: white; border: none; border-radius: 8px; padding: 8px 12px; font-weight: bold; cursor: pointer; }
     .risk-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-top: 4px; display: inline-block; font-weight: bold; }
     .risk-badge.high { background: #ef4444; color: white; }
+    .risk-badge.low { background: #f59e0b; color: white; }
+    .amount { font-size: 12px; color: #a1a1aa; margin-top: 2px; }
   </style>
 </head>
 <body>
