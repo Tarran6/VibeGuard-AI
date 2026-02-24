@@ -429,7 +429,7 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
         return
 
     def _do_log():
-        w3 = Web3(Web3.HTTPProvider(HTTP_URLS[0]))
+        w3 = get_smart_w3(_RAW_HTTP_URL)
         acct = w3.eth.account.from_key(ONCHAIN_PRIVKEY)
         contract = w3.eth.contract(
             address=Web3.to_checksum_address(ONCHAIN_CONTRACT),
