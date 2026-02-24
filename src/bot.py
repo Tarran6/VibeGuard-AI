@@ -223,56 +223,57 @@ def is_owner(uid: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# SQLITE
+# POSTGRESQL
 # ---------------------------------------------------------------------------
 
-async def init_db() -> None:
+async def init_db():
     global pool, db
-    pool = await aiosqlite.connect("vibeguard.db")
-    await pool.execute(
-        "CREATE TABLE IF NOT EXISTS bot_data "
-        "(id INTEGER PRIMARY KEY, data TEXT NOT NULL)"
-    )
-    async with pool.execute("SELECT data FROM bot_data WHERE id = 1") as cursor:
-        row = await cursor.fetchone()
-        if row:
-            raw_data = row[0]
-            loaded = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
-            db = {**_DB_DEFAULT, **loaded}
-            db["stats"] = {**_DB_DEFAULT["stats"], **loaded.get("stats", {})}
-            db["cfg"]   = {**_DB_DEFAULT["cfg"],   **loaded.get("cfg",   {})}
-            if db["cfg"]["limit_usd"] < LIMIT_MIN_USD:
-                db["cfg"]["limit_usd"] = LIMIT_MIN_USD
-            db.setdefault("connected_wallets", {})
-            db.setdefault("pending_verifications", {})
-            logger.info("✅ БД загружена")
-        else:
-            import copy
-            db = copy.deepcopy(_DB_DEFAULT)
-            await pool.execute(
-                "INSERT INTO bot_data (id, data) VALUES (1, ?)",
-                (json.dumps(db),),  # <-- Кортеж с одним элементом
-            )
-            logger.info("🆕 Создана новая БД")
+    db_url = os.getenv("DATABASE_URL")
+    
+    # Railway иногда дает ссылки 'postgres://', а asyncpg любит 'postgresql://'
+    if db_url and db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
 
+    try:
+        # Создаем пул соединений к твоему Postgres на Railway
+        pool = await asyncpg.create_pool(db_url)
+        
+        async with pool.acquire() as conn:
+            # Создаем таблицу, если её нет (используем тип JSONB для скорости)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bot_data (
+                    id INTEGER PRIMARY KEY,
+                    data JSONB NOT NULL
+                )
+            """)
+            
+            row = await conn.fetchrow("SELECT data FROM bot_data WHERE id = 1")
+            if row:
+                # Загружаем данные из Postgres
+                loaded_data = json.loads(row['data'])
+                db.update({**_DB_DEFAULT, **loaded_data})
+                logger.info("✅ Статистика успешно загружена из PostgreSQL")
+            else:
+                # Если база пустая, создаем первую запись
+                db.update(_DB_DEFAULT.copy())
+                await conn.execute("INSERT INTO bot_data (id, data) VALUES (1, $1)", json.dumps(db))
+                logger.info("🆕 Создана новая запись в PostgreSQL")
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к Postgres: {e}")
+        # Fallback на пустую базу в памяти, если Postgres лег
+        db.update(_DB_DEFAULT.copy())
 
-async def save_db() -> None:
-    if not pool:
-        return
-    for attempt in range(3):
-        try:
-            data_json = json.dumps(db)
-            await pool.execute(
-                "INSERT OR REPLACE INTO bot_data (id, data) VALUES (1, ?)",
-                (data_json,),  # <-- Передаем как кортеж с одним элементом
+async def save_db():
+    if not pool: return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO bot_data (id, data) VALUES (1, $1) "
+                "ON CONFLICT (id) DO UPDATE SET data = $1",
+                json.dumps(db)
             )
-            await pool.commit()
-            return
-        except Exception as e:
-            logger.warning(f"save_db попытка {attempt+1}/3: {e}")
-            if attempt < 2:
-                await asyncio.sleep(2 ** attempt)
-    logger.error("❌ save_db: все 3 попытки провалились")
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка сохранения в Postgres: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +295,27 @@ async def _fetch_bnb_price() -> float:
         logger.warning(f"BNB price fetch error: {e}")
     return 600.0  # fallback
 
+
+async def fetch_source_code(contract_address: str) -> Optional[str]:
+    """Выкачивает исходный код контракта через API BscScan/opBNBScan"""
+    api_key = os.getenv("BSCSCAN_API_KEY")
+    if not api_key:
+        return None
+    
+    # URL для opBNB (или измени на bsc для основной сети)
+    url = f"https://api-opbnb.bscscan.com/api?module=contract&action=getsourcecode&address={contract_address}&apikey={api_key}"
+    
+    try:
+        async with http_session.get(url, timeout=10) as r:
+            data = await r.json()
+            if data['status'] == '1':
+                # Извлекаем код (он может быть в разном формате, берем первый файл)
+                source = data['result'][0].get('SourceCode', '')
+                return source[:15000] # Ограничиваем длину, чтобы ИИ не подавился
+            return None
+    except Exception as e:
+        logger.error(f"Ошибка выкачивания кода: {e}")
+        return None
 
 async def _fetch_token_price(token_addr: str) -> float:
     try:
@@ -1442,6 +1464,45 @@ async def cmd_check(m: types.Message) -> None:
         await bot.edit_message_text(result_text, m.chat.id, wait.message_id)
     except Exception:
         await safe_send(m.chat.id, result_text)
+
+
+@bot.message_handler(commands=["audit"])
+async def cmd_audit(m: types.Message):
+    args = m.text.split()
+    if len(args) < 2:
+        return await bot.reply_to(m, "Пример: `/audit 0x...`")
+    
+    addr = args[1].strip()
+    wait = await bot.reply_to(m, "🕵️‍♂️ **Выкачиваю код и запускаю ИИ-аудит...**")
+    
+    # 1. Берем код
+    code = await fetch_source_code(addr)
+    if not code:
+        return await bot.edit_message_text("❌ Код не верифицирован или контракт не найден.", m.chat.id, wait.message_id)
+
+    # 2. Формируем запрос для Grok/Gemini
+    prompt = f"""
+    Ты - эксперт по безопасности Solidity. Проанализируй этот код контракта на наличие бэкдоров:
+    {code}
+    
+    Найди: 
+    1. Функции Mint (печать новых токенов).
+    2. Функции Pause (остановка торгов).
+    3. Скрытую смену владельца.
+    4. Логику Honeypot.
+    
+    Ответь кратко на русском:
+    - Вердикт (Безопасно/Опасно/Внимание).
+    - Список критических уязвимостей (если есть).
+    - Можно ли это покупать?
+    """
+
+    # 3. Зовем ИИ
+    verdict = await call_ai(prompt)
+    
+    # 4. Выводим результат
+    report = f"🔍 **Результат ИИ-Аудита:**\n`{addr}`\n\n{verdict}"
+    await bot.edit_message_text(report, m.chat.id, wait.message_id)
 
 
 @bot.message_handler(commands=["status", "stats"])
