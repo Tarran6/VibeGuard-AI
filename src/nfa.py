@@ -11,8 +11,36 @@ load_dotenv()
 
 logger = logging.getLogger("vibeguard.nfa")
 
-# Подключение к opBNB
-w3 = Web3(Web3.HTTPProvider(os.getenv("OPBNB_HTTP_URL")))
+
+# ---------------------------------------------------------------------------
+# УМНОЕ ПОДКЛЮЧЕНИЕ К БЛОКЧЕЙНУ
+# ---------------------------------------------------------------------------
+
+def get_smart_w3(url_string):
+    """Умное подключение к блокчейну с автоматическим переключением"""
+    urls = [u.strip() for u in url_string.split(",") if u.strip()]
+    # Пробуем подключиться по очереди, пока не найдем живой узел
+    for url in urls:
+        try:
+            if url.startswith('http'):
+                provider = Web3.HTTPProvider(url, request_kwargs={'timeout': 3})
+            elif url.startswith('ws'):
+                provider = Web3.WebsocketProvider(url)
+            else:
+                continue
+                
+            temp_w3 = Web3(provider)
+            if temp_w3.is_connected():
+                logger.info(f"✅ Успешное подключение к блокчейну через: {url}")
+                return temp_w3
+        except Exception as e:
+            logger.warning(f"⚠️ Узел {url} недоступен, пробую следующий... Ошибка: {e}")
+            continue
+    raise Exception("❌ КРИТИЧЕСКАЯ ОШИБКА: Ни один из RPC-узлов не отвечает!")
+
+
+# Подключение к opBNB с умным переключением
+w3 = get_smart_w3(os.getenv("OPBNB_HTTP_URL"))
 w3.middleware_onion.inject(geth_poa_middleware, layer=0)
 
 # Переменные окружения
