@@ -518,7 +518,7 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
 
 async def call_ai(prompt: str) -> str:
     configs = (
-        [("xai",    k) for k in XAI_KEYS]  +
+        # [("xai",    k) for k in XAI_KEYS]  +   # ← xAI отключён
         [("groq",   k) for k in GROQ_KEYS] +
         [("gemini", k) for k in GEMINI_KEYS] +
         [("deepseek", k) for k in DEEPSEEK_KEYS]
@@ -1510,7 +1510,7 @@ Token ID: <code>{token_id}</code>
 💰 Защищено: <b>${protected_usd:,.2f}</b>
 📊 Сканов сделано: <b>{scans:,}</b>
 
-🔗 <a href="https://opbnbscan.com/token/0x6D32BA27Cb51292F71C0Ee602366e7BFE586c9F6?a={token_id}">Посмотреть на opbnbscan</a>
+🔗 <a href="https://opbnbscan.com/token/{os.getenv('NFA_CONTRACT_ADDRESS')}?a={token_id}">Посмотреть на opbnbscan</a>
 """
 
     kb = types.InlineKeyboardMarkup()
@@ -1536,7 +1536,7 @@ Token ID: <code>{token_id}</code>
 💰 Защищено: <b>${protected_usd:,.2f}</b>
 📊 Сканов сделано: <b>{scans:,}</b>
 
-🔗 <a href="https://opbnbscan.com/token/0x6D32BA27Cb51292F71C0Ee602366e7BFE586c9F6?a={token_id}">Посмотреть на opbnbscan</a>
+🔗 <a href="https://opbnbscan.com/token/{os.getenv('NFA_CONTRACT_ADDRESS')}?a={token_id}">Посмотреть на opbnbscan</a>
 """
 
         kb = types.InlineKeyboardMarkup()
