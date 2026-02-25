@@ -26,6 +26,9 @@ from telebot import types
 from telebot.async_telebot import AsyncTeleBot
 from web3 import Web3
 
+# NFA импорт
+from src.nfa import mint_guardian, update_guardian_learning, attest_protection
+
 # ---------------------------------------------------------------------------
 # КОНФИГУРАЦИЯ
 # ---------------------------------------------------------------------------
@@ -1426,6 +1429,23 @@ async def handle_webapp_data(m: types.Message) -> None:
             f"этого адреса.",
         )
         logger.info(f"✅ Кошелёк подключён: {address[:8]}... для user_id={uid}")
+        
+        # Минтим Guardian NFT для пользователя
+        try:
+            token_id = await mint_guardian(
+                name=f"Guardian_{uid}", 
+                image_uri="https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png"
+            )
+            await safe_send(
+                uid,
+                f"🛡️ <b>Вам выдан Guardian NFT!</b>\n"
+                f"Token ID: `{token_id}`\n\n"
+                f"Ваш персональный защитник теперь следит за безопасностью ваших активов!"
+            )
+            logger.info(f"🛡️ Guardian NFT заминчен: token_id={token_id} для user_id={uid}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка минта Guardian для user_id={uid}: {e}")
+            # Не прерываем основной поток, просто логируем
     else:
         await safe_send(uid, f"❌ {esc(message)}")
         logger.warning(f"❌ Ошибка подключения кошелька: {message}")
