@@ -258,6 +258,10 @@ async def init_db():
                 db.update(_DB_DEFAULT.copy())
                 await conn.execute("INSERT INTO bot_data (id, data) VALUES (1, $1)", json.dumps(db))
                 logger.info("🆕 Создана новая запись в PostgreSQL")
+            
+            # Убедимся что audit_cache существует
+            if "audit_cache" not in db:
+                db["audit_cache"] = {}
     except Exception as e:
         logger.error(f"❌ Ошибка подключения к Postgres: {e}")
         # Fallback на пустую базу в памяти, если Postgres лег
@@ -632,8 +636,20 @@ def get_whale_markup(token_addr: str = None):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btns = []
     if token_addr:
-        btns.append(types.InlineKeyboardButton("📊 График", url=f"https://dexscreener.com/bsc/{token_addr}"))
-    btns.append(types.InlineKeyboardButton("⚙️ Мой лимит", callback_data="menu_settings"))
+        # Кнопка "График" (DexScreener)
+        btns.append(types.InlineKeyboardButton(
+            "📊 График", 
+            url=f"https://dexscreener.com/bsc/{token_addr}"
+        ))
+        # 🔥 Новая кнопка для ИИ-аудита
+        btns.append(types.InlineKeyboardButton(
+            "🧠 Deep Audit", 
+            callback_data=f"ai_audit:{token_addr}"
+        ))
+    btns.append(types.InlineKeyboardButton(
+        "⚙️ Мой лимит", 
+        callback_data="menu_settings"
+    ))
     markup.add(*btns)
     return markup
 
@@ -968,6 +984,16 @@ async def monitor() -> None:
 # ---------------------------------------------------------------------------
 # ВЕРИФИКАЦИЯ КОШЕЛЬКА
 # ---------------------------------------------------------------------------
+
+def get_cached_audit(addr: str) -> Optional[str]:
+    """Возвращает закешированный результат аудита, если он не старше 1 часа."""
+    cache = db.get("audit_cache", {})
+    entry = cache.get(addr.lower())
+    if entry:
+        age = time.time() - entry["timestamp"]
+        if age < 3600:  # 1 час
+            return entry["result"]
+    return None
 
 async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[bool, str]:
     uid_str = str(user_id)
@@ -1305,6 +1331,19 @@ async def cb_connect_new(c: types.CallbackQuery) -> None:
     await cmd_connect(c.message)
 
 
+@bot.callback_query_handler(func=lambda c: c.data.startswith("ai_audit:"))
+async def cb_ai_audit_whale(c: types.CallbackQuery):
+    addr = c.data.split(":", 1)[1]
+    
+    # Убираем "часики" на кнопке и даём обратную связь
+    await bot.answer_callback_query(c.id, "🔍 Запускаю глубокий аудит кода...")
+    
+    # Вызываем общую функцию аудита
+    # Используем chat_id из исходного сообщения и не привязываемся к reply_to_message_id,
+    # чтобы результат пришёл новым сообщением (или можно ответить на то же сообщение)
+    await perform_audit(addr, c.message.chat.id, c.message.message_id)
+
+
 # ---------------------------------------------------------------------------
 # ОБРАБОТКА ДАННЫХ FROM WEBAPP
 # ---------------------------------------------------------------------------
@@ -1466,24 +1505,56 @@ async def cmd_check(m: types.Message) -> None:
         await safe_send(m.chat.id, result_text)
 
 
-@bot.message_handler(commands=["audit"])
-async def cmd_audit(m: types.Message):
-    args = m.text.split()
-    if len(args) < 2:
-        return await bot.reply_to(m, "Пример: `/audit 0x...`")
+async def perform_audit(addr: str, chat_id: int, reply_to_message_id: int = None):
+    """
+    Универсальная функция аудита.
+    addr – адрес контракта,
+    chat_id – куда отправлять результат,
+    reply_to_message_id – если нужно ответить на конкретное сообщение.
+    """
+    # 0. Проверка кеша
+    cached = get_cached_audit(addr)
+    if cached:
+        report = (
+            f"🔍 <b>Результат ИИ-Аудита (из кеша)</b>\n"
+            f"<code>{esc(addr)}</code>\n\n"
+            f"{cached}"
+        )
+        await bot.send_message(
+            chat_id, 
+            report,
+            reply_to_message_id=reply_to_message_id
+        )
+        return
     
-    addr = args[1].strip()
-    wait = await bot.reply_to(m, "🕵️‍♂️ **Выкачиваю код и запускаю ИИ-аудит...**")
+    # Отправляем начальное сообщение
+    status_msg = await bot.send_message(
+        chat_id,
+        "🕵️‍♂️ <b>Шаг 1/2:</b> Получаю исходный код контракта...",
+        reply_to_message_id=reply_to_message_id
+    )
     
-    # 1. Берем код
+    # 1. Получаем код
     code = await fetch_source_code(addr)
     if not code:
-        return await bot.edit_message_text("❌ Код не верифицирован или контракт не найден.", m.chat.id, wait.message_id)
-
-    # 2. Формируем запрос для Grok/Gemini
+        await bot.edit_message_text(
+            "❌ Код не верифицирован или контракт не найден.",
+            chat_id,
+            status_msg.message_id
+        )
+        return
+    
+    # Обновляем статус
+    await bot.edit_message_text(
+        "🕵️‍♂️ <b>Шаг 2/2:</b> Анализирую код с помощью ИИ...",
+        chat_id,
+        status_msg.message_id
+    )
+    
+    # 2. Формируем промпт
     prompt = f"""
     Ты - эксперт по безопасности Solidity. Проанализируй этот код контракта на наличие бэкдоров:
-    {code}
+    {code[:15000]}  # ограничение длины
     
     Найди: 
     1. Функции Mint (печать новых токенов).
@@ -1496,13 +1567,36 @@ async def cmd_audit(m: types.Message):
     - Список критических уязвимостей (если есть).
     - Можно ли это покупать?
     """
-
-    # 3. Зовем ИИ
-    verdict = await call_ai(prompt)
     
-    # 4. Выводим результат
-    report = f"🔍 **Результат ИИ-Аудита:**\n`{addr}`\n\n{verdict}"
-    await bot.edit_message_text(report, m.chat.id, wait.message_id)
+    # 3. Зовём AI
+    async with ai_sem:
+        verdict = await call_ai(prompt)
+    
+    # 4. Сохраняем в кеш
+    async with db_lock:
+        db.setdefault("audit_cache", {})[addr.lower()] = {
+            "result": verdict,
+            "timestamp": time.time()
+        }
+    await save_db()
+    
+    # 5. Финальный отчёт
+    report = (
+        f"🔍 <b>Результат ИИ-Аудита</b>\n"
+        f"<code>{esc(addr)}</code>\n\n"
+        f"{verdict}"
+    )
+    await bot.edit_message_text(report, chat_id, status_msg.message_id)
+
+
+@bot.message_handler(commands=["audit"])
+async def cmd_audit(m: types.Message):
+    args = m.text.split()
+    if len(args) < 2:
+        return await bot.reply_to(m, "Пример: `/audit 0x...`")
+    
+    addr = args[1].strip()
+    await perform_audit(addr, m.chat.id, m.message_id)
 
 
 @bot.message_handler(commands=["status", "stats"])
