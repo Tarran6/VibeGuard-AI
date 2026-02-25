@@ -528,12 +528,16 @@ async def call_ai(prompt: str) -> str:
 
     async with ai_sem:
         for provider, key in configs:
+            logger.info(f"🤖 Пробуем AI провайдера: {provider}")
             try:
                 result = await _ai_request(provider, key, prompt)
                 if result:
+                    logger.info(f"✅ AI [{provider}] успешно ответил")
                     return esc(result)
+                else:
+                    logger.warning(f"⚠️ AI [{provider}] вернул пустой ответ")
             except Exception as e:
-                logger.warning(f"AI [{provider}] error: {e}")
+                logger.warning(f"❌ AI [{provider}] ошибка: {e}")
 
     return "Все AI-провайдеры временно недоступны."
 
