@@ -107,11 +107,13 @@ def get_smart_w3(url_string):
 GEMINI_KEYS = [k for k in _optional("GEMINI_API_KEY").split(",") if k.strip()]
 GROQ_KEYS   = [k for k in _optional("GROQ_API_KEY").split(",") if k.strip()]
 XAI_KEYS    = [k for k in _optional("XAI_API_KEY").split(",")    if k.strip()]
+DEEPSEEK_KEYS = [k for k in _optional("DEEPSEEK_API_KEY").split(",") if k.strip()]
 
-# AI модели (можно переопределить через env)
-XAI_MODEL = _optional("XAI_MODEL", "grok-2-1212")
+# AI модели
+XAI_MODEL = _optional("XAI_MODEL", "grok-2-latest")
 GROQ_MODEL = _optional("GROQ_MODEL", "llama-3.3-70b-versatile")
 GEMINI_MODEL = _optional("GEMINI_MODEL", "gemini-2.0-flash")
+DEEPSEEK_MODEL = _optional("DEEPSEEK_MODEL", "deepseek-chat")
 
 GOPLUS_APP_KEY    = _optional("GOPLUS_APP_KEY")
 GOPLUS_APP_SECRET = _optional("GOPLUS_APP_SECRET")
@@ -138,7 +140,7 @@ ERC20_TRANSFER_TOPIC = (
 
 bot = AsyncTeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
 
-if not any([XAI_KEYS, GROQ_KEYS, GEMINI_KEYS]):
+if not any([XAI_KEYS, GROQ_KEYS, GEMINI_KEYS, DEEPSEEK_KEYS]):
     logger.warning("⚠️  Ни один AI-ключ не задан — AI-функции отключены")
 
 if not WEBAPP_URL:
@@ -462,6 +464,14 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
     def _do_log():
         w3 = get_smart_w3(_RAW_HTTP_URL)
         acct = w3.eth.account.from_key(ONCHAIN_PRIVKEY)
+        
+        # Проверяем баланс
+        balance = w3.eth.get_balance(acct.address)
+        required = w3.eth.gas_price * 130_000
+        if balance < required:
+            logger.warning(f"Insufficient balance: {balance} wei, required: {required}")
+            return None
+        
         contract = w3.eth.contract(
             address=Web3.to_checksum_address(ONCHAIN_CONTRACT),
             abi=_SCAN_ABI,
@@ -476,8 +486,18 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
             "gas":      130_000,
             "gasPrice": w3.eth.gas_price,
         })
-        signed  = w3.eth.account.sign_transaction(tx, acct.key)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        signed = w3.eth.account.sign_transaction(tx, acct.key)
+        
+        # Пытаемся получить сырую транзакцию из разных атрибутов
+        raw_tx = (
+            getattr(signed, 'raw_transaction', None) or 
+            getattr(signed, 'rawTransaction', None) or 
+            getattr(signed, 'transaction', None)
+        )
+        if raw_tx is None:
+            raise AttributeError("Cannot find raw transaction attribute in signed object")
+        
+        tx_hash = w3.eth.send_raw_transaction(raw_tx)
         return tx_hash.hex()
 
     try:
@@ -496,7 +516,8 @@ async def call_ai(prompt: str) -> str:
     configs = (
         [("xai",    k) for k in XAI_KEYS]  +
         [("groq",   k) for k in GROQ_KEYS] +
-        [("gemini", k) for k in GEMINI_KEYS]
+        [("gemini", k) for k in GEMINI_KEYS] +
+        [("deepseek", k) for k in DEEPSEEK_KEYS]
     )
     if not configs:
         return "AI-ключи не настроены."
@@ -529,6 +550,18 @@ async def _ai_request(provider: str, key: str, prompt: str) -> Optional[str]:
         payload = {
             "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
+        }
+    elif provider == "deepseek":
+        url = "https://api.deepseek.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": DEEPSEEK_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": 2000
         }
     else:  # gemini
         url     = (
@@ -597,6 +630,15 @@ async def check_scam(addr: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 async def safe_send(chat_id: int, text: str, **kwargs) -> None:
+    # Пропускаем ботов
+    try:
+        chat = await bot.get_chat(chat_id)
+        if chat.type == 'private' and getattr(chat, 'is_bot', False):
+            logger.debug(f"Skipping bot chat {chat_id}")
+            return
+    except Exception as e:
+        logger.warning(f"Failed to get chat {chat_id}: {e}")
+    
     async with tg_sem:
         try:
             await bot.send_message(chat_id, text, **kwargs)
