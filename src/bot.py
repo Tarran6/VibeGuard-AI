@@ -157,6 +157,7 @@ _DB_DEFAULT: dict = {
     "stats": {"blocks": 0, "whales": 0, "threats": 0},
     "cfg":   {"limit_usd": 10_000.0, "watch": [], "ignore": []},
     "user_limits": {}, # <-- Добавили хранилище персональных лимитов
+    "user_guardians": {},   # <-- добавить сюда
     "last_block": 0,
     "connected_wallets": {},
     "pending_verifications": {},
@@ -1430,22 +1431,31 @@ async def handle_webapp_data(m: types.Message) -> None:
         )
         logger.info(f"✅ Кошелёк подключён: {address[:8]}... для user_id={uid}")
         
-        # Минтим Guardian NFT для пользователя
+        # ===== ТВОЙ НОВЫЙ БЛОК =====
         try:
             token_id = await mint_guardian(
-                name=f"Guardian_{uid}", 
+                name=f"Guardian_{uid}",
                 image_uri="https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png"
             )
+            
             await safe_send(
                 uid,
                 f"🛡️ <b>Вам выдан Guardian NFT!</b>\n"
-                f"Token ID: `{token_id}`\n\n"
-                f"Ваш персональный защитник теперь следит за безопасностью ваших активов!"
+                f"Token ID: <code>{token_id}</code>\n\n"
+                f"Теперь ваш персональный Neural Guardian следит за безопасностью активов!"
             )
+            
+            # Сохраняем token_id в БД
+            async with db_lock:
+                if "user_guardians" not in db:
+                    db["user_guardians"] = {}
+                db["user_guardians"][str(uid)] = token_id
+            
             logger.info(f"🛡️ Guardian NFT заминчен: token_id={token_id} для user_id={uid}")
         except Exception as e:
             logger.error(f"❌ Ошибка минта Guardian для user_id={uid}: {e}")
-            # Не прерываем основной поток, просто логируем
+            # Не прерываем подключение кошелька, просто логируем
+        # ===== КОНЕЦ БЛОКА =====
     else:
         await safe_send(uid, f"❌ {esc(message)}")
         logger.warning(f"❌ Ошибка подключения кошелька: {message}")
