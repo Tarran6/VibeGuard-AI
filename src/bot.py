@@ -27,7 +27,7 @@ from telebot.async_telebot import AsyncTeleBot
 from web3 import Web3
 
 # NFA импорт (относительный, так как bot.py в папке src)
-from nfa import mint_guardian, update_guardian_learning, attest_protection
+from nfa import mint_guardian, update_guardian_learning, attest_protection, contract
 
 # ---------------------------------------------------------------------------
 # КОНФИГУРАЦИЯ
@@ -1469,6 +1469,90 @@ async def cmd_mywallets(m: types.Message) -> None:
         f"🐳 Глобальный лимит китов: <b>${limit:,.0f}</b>",
         reply_markup=kb
     )
+
+
+# =============================================================================
+# КОМАНДА /myguardian — персональный Guardian NFT
+# =============================================================================
+@bot.message_handler(commands=["myguardian", "guardian"])
+async def cmd_myguardian(m: types.Message) -> None:
+    uid = m.from_user.id
+
+    async with db_lock:
+        token_id = db.get("user_guardians", {}).get(str(uid))
+        if not token_id:
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("🔗 Получить Guardian", callback_data="connect_new"))
+            await bot.reply_to(
+                m,
+                "👛 У тебя пока нет Guardian NFT.\n\n"
+                "Подключи кошелёк и получи своего персонального Neural Guardian!",
+                reply_markup=kb
+            )
+            return
+
+    # Читаем данные с контракта
+    try:
+        protected = contract.functions.protectedAmount(token_id).call()
+        scans = contract.functions.scanCount(token_id).call()
+    except Exception as e:
+        logger.warning(f"Не удалось прочитать данные Guardian {token_id}: {e}")
+        protected = 0
+        scans = 0
+
+    protected_usd = protected / 1_000_000   # 6 decimals для USD (можно сделать динамически)
+
+    text = f"""
+🛡️ <b>Твой Guardian NFT</b>
+
+Token ID: <code>{token_id}</code>
+
+💰 Защищено: <b>${protected_usd:,.2f}</b>
+📊 Сканов сделано: <b>{scans:,}</b>
+
+🔗 <a href="https://opbnbscan.com/token/0x6D32BA27Cb51292F71C0Ee602366e7BFE586c9F6?a={token_id}">Посмотреть на opbnbscan</a>
+"""
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔄 Обновить данные", callback_data=f"refresh_guardian:{token_id}"))
+
+    await bot.reply_to(m, text, reply_markup=kb, disable_web_page_preview=True)
+
+
+# Callback для кнопки "Обновить данные"
+@bot.callback_query_handler(func=lambda c: c.data.startswith("refresh_guardian:"))
+async def cb_refresh_guardian(c: types.CallbackQuery):
+    try:
+        token_id = int(c.data.split(":")[1])
+        protected = contract.functions.protectedAmount(token_id).call()
+        scans = contract.functions.scanCount(token_id).call()
+        protected_usd = protected / 1_000_000
+
+        text = f"""
+🛡️ <b>Твой Guardian NFT</b>
+
+Token ID: <code>{token_id}</code>
+
+💰 Защищено: <b>${protected_usd:,.2f}</b>
+📊 Сканов сделано: <b>{scans:,}</b>
+
+🔗 <a href="https://opbnbscan.com/token/0x6D32BA27Cb51292F71C0Ee602366e7BFE586c9F6?a={token_id}">Посмотреть на opbnbscan</a>
+"""
+
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔄 Обновить данные", callback_data=f"refresh_guardian:{token_id}"))
+
+        await bot.edit_message_text(
+            text,
+            chat_id=c.message.chat.id,
+            message_id=c.message.message_id,
+            reply_markup=kb,
+            disable_web_page_preview=True
+        )
+        await bot.answer_callback_query(c.id, "✅ Данные обновлены")
+    except Exception as e:
+        logger.error(f"refresh_guardian error: {e}")
+        await bot.answer_callback_query(c.id, "❌ Ошибка обновления", show_alert=True)
 
 
 @bot.message_handler(commands=["disconnect"])
