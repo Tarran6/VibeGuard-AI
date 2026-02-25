@@ -108,7 +108,15 @@ def _sync_mint_guardian(name: str, image_uri: str):
             'gasPrice': gas_price
         })
         signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        # Универсальное получение raw transaction
+        raw_tx = (
+            getattr(signed_tx, 'raw_transaction', None) or 
+            getattr(signed_tx, 'rawTransaction', None) or 
+            getattr(signed_tx, 'transaction', None)
+        )
+        if raw_tx is None:
+            raise AttributeError("Cannot find raw transaction attribute in signed object")
+        tx_hash = w3.eth.send_raw_transaction(raw_tx)
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
 
         # Вычисляем topic события GuardianMinted(address,uint256,string)
@@ -147,7 +155,15 @@ def _sync_update_learning(token_id: int, new_merkle_root: bytes, protected_usd: 
             'gasPrice': gas_price
         })
         signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        # Универсальное получение raw transaction
+        raw_tx = (
+            getattr(signed_tx, 'raw_transaction', None) or 
+            getattr(signed_tx, 'rawTransaction', None) or 
+            getattr(signed_tx, 'transaction', None)
+        )
+        if raw_tx is None:
+            raise AttributeError("Cannot find raw transaction attribute in signed object")
+        tx_hash = w3.eth.send_raw_transaction(raw_tx)
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
         logger.info(f"✅ updateLearning succeeded for token {token_id}")
         return receipt
@@ -166,7 +182,15 @@ def _sync_attest_protection(token_id: int, wallet: str, risk_score: int):
             'gasPrice': gas_price
         })
         signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        # Универсальное получение raw transaction
+        raw_tx = (
+            getattr(signed_tx, 'raw_transaction', None) or 
+            getattr(signed_tx, 'rawTransaction', None) or 
+            getattr(signed_tx, 'transaction', None)
+        )
+        if raw_tx is None:
+            raise AttributeError("Cannot find raw transaction attribute in signed object")
+        tx_hash = w3.eth.send_raw_transaction(raw_tx)
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
         logger.info(f"✅ attestProtection succeeded for token {token_id}")
         return receipt
