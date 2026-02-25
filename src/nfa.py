@@ -69,6 +69,7 @@ contract = w3.eth.contract(address=Web3.to_checksum_address(NFA_ADDRESS), abi=AB
 # ---------- Синхронные ядра (выполняются в потоках) ----------
 def _sync_mint_guardian(name: str, image_uri: str):
     """Синхронная функция минта Guardian NFT"""
+    logger.info(f"⚙️ _sync_mint_guardian вызван с name={name}")
     try:
         nonce = w3.eth.get_transaction_count(OWNER_ADDRESS)
         gas_price = w3.eth.gas_price

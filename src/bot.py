@@ -1374,36 +1374,39 @@ async def handle_webapp_data(m: types.Message) -> None:
         address = data.get("address", "").strip()
         sig = data.get("signature", "").strip()
         nonce = data.get("nonce", "").strip()
-        
-        logger.info(f"📥 WebApp данные: address={address[:8]}..., nonce={nonce[:8]}...")
+        logger.info(f"� Данные: address={address[:8]}..., nonce={nonce[:8]}...")
     except Exception as e:
         logger.warning(f"webapp_data parse error uid={uid}: {e}")
         await safe_send(uid, "❌ Ошибка данных от WebApp. Попробуй ещё раз.")
         return
 
     if not address or not sig or not nonce:
+        logger.warning(f"Неполные данные от {uid}")
         await safe_send(uid, "❌ Неполные данные от WebApp.")
         return
 
+    # Вызываем verify_wallet
+    logger.info(f"🔐 Вызываем verify_wallet для user_id={uid}")
     success, message = await verify_wallet(uid, address, sig)
+    logger.info(f"✅ verify_wallet вернул: success={success}, message={message}")
 
     if success:
+        logger.info(f"✅ Кошелёк успешно верифицирован для user_id={uid}")
         await safe_send(
             uid,
             f"✅ <b>Кошелёк подключён!</b>\n"
             f"<code>{esc(address.lower())}</code>\n\n"
-            f"Теперь ты получаешь личные алерты о всех транзакциях "
-            f"этого адреса.",
+            f"Теперь ты получаешь личные алерты о всех транзакциях этого адреса.",
         )
-        logger.info(f"✅ Кошелёк подключён: {address[:8]}... для user_id={uid}")
-        logger.info(f"🔄 Начинаем минт Guardian для user_id={uid}")
         
-        # ===== ТВОЙ НОВЫЙ БЛОК =====
+        # Начинаем минт
+        logger.info(f"🔄 Начинаем минт Guardian для user_id={uid}")
         try:
             token_id = await mint_guardian(
                 name=f"Guardian_{uid}",
                 image_uri="https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png"
             )
+            logger.info(f"✅ mint_guardian вернул token_id={token_id}")
             
             await safe_send(
                 uid,
@@ -1417,15 +1420,16 @@ async def handle_webapp_data(m: types.Message) -> None:
                 if "user_guardians" not in db:
                     db["user_guardians"] = {}
                 db["user_guardians"][str(uid)] = token_id
+                logger.info(f"💾 token_id={token_id} сохранён в БД для user_id={uid}")
             
-            logger.info(f"🛡️ Guardian NFT заминчен: token_id={token_id} для user_id={uid}")
+            await save_db()
+            logger.info(f"🎉 Guardian NFT успешно заминчен и сохранён для user_id={uid}")
         except Exception as e:
-            logger.error(f"❌ Ошибка минта Guardian для user_id={uid}: {e}")
-            # Не прерываем подключение кошелька, просто логируем
-        # ===== КОНЕЦ БЛОКА =====
+            logger.error(f"❌ Ошибка минта Guardian для user_id={uid}: {e}", exc_info=True)
+            # Не прерываем основной поток, просто логируем
     else:
+        logger.warning(f"❌ Ошибка верификации: {message}")
         await safe_send(uid, f"❌ {esc(message)}")
-        logger.warning(f"❌ Ошибка подключения кошелька: {message}")
 
 
 # ---------------------------------------------------------------------------
