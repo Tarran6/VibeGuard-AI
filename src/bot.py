@@ -1201,50 +1201,6 @@ async def cmd_connect(m: types.Message) -> None:
     )
 
 
-@bot.message_handler(content_types=["web_app_data"])
-async def handle_webapp_data(m: types.Message) -> None:
-    uid = m.from_user.id
-    logger.info(f"📩 Получены web_app_data от пользователя {uid}")
-    
-    try:
-        # Парсим JSON из WebApp
-        raw_data = m.web_app_data.data
-        data = json.loads(raw_data)
-        
-        address = data.get("address", "").strip()
-        sig = data.get("signature", "").strip()
-        # Этот nonce критически важен для связи сессии!
-        nonce_from_app = data.get("nonce", "").strip() 
-        
-        logger.info(f"📦 Данные: address={address[:10]}..., nonce={nonce_from_app[:8]}...")
-    except Exception as e:
-        logger.warning(f"webapp_data parse error uid={uid}: {e}")
-        await safe_send(uid, "❌ Ошибка данных от WebApp. Попробуй ещё раз.")
-        return
-
-    if not address or not sig:
-        logger.warning(f"Неполные данные от {uid}")
-        await safe_send(uid, "❌ Неполные данные от WebApp.")
-        return
-
-    # Запускаем верификацию (она проверит подпись и nonce)
-    success, message = await verify_wallet(uid, address, sig)
-
-    if success:
-        logger.info(f"✅ Кошелёк {address[:10]}... успешно подключён пользователем {uid}")
-        await safe_send(
-            uid,
-            f"✅ <b>Кошелёк подключён!</b>\n"
-            f"<code>{esc(address.lower())}</code>\n\n"
-            f"Теперь ты получаешь личные алерты о всех транзакциях этого адреса.",
-        )
-        # Принудительно сохраняем БД, чтобы кошелек не пропал после рестарта
-        await save_db()
-    else:
-        logger.warning(f"❌ Ошибка верификации для {uid}: {message}")
-        await safe_send(uid, f"❌ {esc(message)}")
-
-
 # ---------------------------------------------------------------------------
 # ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК
 # ---------------------------------------------------------------------------
@@ -1434,6 +1390,7 @@ async def handle_webapp_data(m: types.Message) -> None:
             f"этого адреса.",
         )
         logger.info(f"✅ Кошелёк подключён: {address[:8]}... для user_id={uid}")
+        logger.info(f"🔄 Начинаем минт Guardian для user_id={uid}")
         
         # ===== ТВОЙ НОВЫЙ БЛОК =====
         try:
