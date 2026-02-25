@@ -26,8 +26,8 @@ from telebot import types
 from telebot.async_telebot import AsyncTeleBot
 from web3 import Web3
 
-# NFA импорт (исправлено для Railway)
-from nfa import mint_guardian, update_guardian_learning, attest_protection
+# NFA импорт (для Railway с папкой src)
+from src.nfa import mint_guardian, update_guardian_learning, attest_protection
 
 # ---------------------------------------------------------------------------
 # КОНФИГУРАЦИЯ
