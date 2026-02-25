@@ -30,8 +30,39 @@ if not os.path.exists(abi_path):
     logger.error(f"ABI file not found: {abi_path}")
     raise FileNotFoundError(f"ABI file missing: {abi_path}")
 
-with open(abi_path, "r") as f:
-    ABI = json.load(f)
+try:
+    with open(abi_path, "r", encoding="utf-8") as f:
+        ABI = json.load(f)
+    logger.info(f"✅ ABI loaded successfully from {abi_path}")
+except UnicodeDecodeError as e:
+    logger.error(f"ABI file encoding error: {e}")
+    # Создаем минимальный ABI для базовой работы
+    ABI = [
+        {
+            "anonymous": False,
+            "inputs": [
+                {"indexed": True, "internalType": "address", "name": "owner", "type": "address"},
+                {"indexed": True, "internalType": "uint256", "name": "tokenId", "type": "uint256"},
+                {"indexed": False, "internalType": "string", "name": "name", "type": "string"}
+            ],
+            "name": "GuardianMinted",
+            "type": "event"
+        },
+        {
+            "inputs": [
+                {"internalType": "string", "name": "name", "type": "string"},
+                {"internalType": "string", "name": "imageURI", "type": "string"}
+            ],
+            "name": "mintGuardian",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+        }
+    ]
+    logger.warning("⚠️ Using fallback ABI due to encoding error")
+except json.JSONDecodeError as e:
+    logger.error(f"ABI JSON decode error: {e}")
+    raise ValueError(f"Invalid ABI format: {e}")
 
 contract = w3.eth.contract(address=Web3.to_checksum_address(NFA_ADDRESS), abi=ABI)
 
