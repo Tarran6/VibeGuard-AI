@@ -2110,144 +2110,145 @@ def format_amount(amount: int, decimals: int) -> str:
     except:
         return str(amount)
 
-# ---------------------------------------------------------------------------
 # HEALTH SERVER (POST /webapp/connect)
 # ---------------------------------------------------------------------------
 
 async def _run_health_server() -> None:
-    from aiohttp import web
-    port = int(os.getenv("PORT", "8080"))
-    cors_headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Max-Age": "86400",
-    }
-
-    async def handle(_):
-        return web.Response(text="ok", headers=cors_headers)
-
-    async def handle_webapp_connect(request):
-        try:
-            payload = await request.json()
-        except Exception:
-            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
-
-        nonce = str(payload.get("nonce", "")).strip()
-        address = str(payload.get("address", "")).strip()
-        signature = str(payload.get("signature", "")).strip()
-
-        if not nonce or not address or not signature:
-            return web.json_response({"ok": False, "error": "missing fields"}, status=400, headers=cors_headers)
-
-        uid: Optional[int] = None
-        async with db_lock:
-            for uid_str, p in db.get("pending_verifications", {}).items():
-                if str(p.get("nonce", "")) == nonce:
-                    try:
-                        uid = int(uid_str)
-                    except Exception:
-                        uid = None
-                    break
-
-        if uid is None:
-            return web.json_response({"ok": False, "error": "session not found"}, status=404, headers=cors_headers)
-
-        success, message = await verify_wallet(uid, address, signature)
-        if success:
-            await safe_send(
-                uid,
-                f"✅ <b>Кошелёк подключён!</b>\n"
-                f"<code>{esc(address.lower())}</code>\n\n"
-                f"Теперь ты получаешь личные алерты о всех транзакциях "
-                f"этого адреса.",
-            )
-            # После успешной верификации запускаем минт Guardian в фоне
-            asyncio.create_task(mint_guardian_for_user(uid))
-            return web.json_response({"ok": True}, headers=cors_headers)
-
-        return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
-
-    async def handle_approvals(request):
-        """API endpoint для сканирования approve"""
-        try:
-            payload = await request.json()
-        except Exception:
-            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
-
-        address = str(payload.get("address", "")).strip()
-        
-        if not address or not Web3.is_address(address):
-            return web.json_response({"ok": False, "error": "invalid address"}, status=400, headers=cors_headers)
-        
-        try:
-            approvals = await scan_approvals(address)
-            return web.json_response({"ok": True, "approvals": approvals}, headers=cors_headers)
-        except Exception as e:
-            logger.error(f"handle_approvals error: {e}")
-            return web.json_response({"ok": False, "error": "scan failed"}, status=500, headers=cors_headers)
-
-    async def handle_webapp_connect_options(_):
-        return web.Response(status=204, headers=cors_headers)
-
-    async def handle_webapp_approvals_options(_):
-        return web.Response(status=204, headers=cors_headers)
-
-    async def handle_webapp_approvals(request):
-        # Этот код поймет и GET (?address=) и POST ({"address": "0x"})
-        address = request.query.get("address")
-        if not address and request.method == "POST":
-            try:
-                data = await request.json()
-                address = data.get("address")
-            except: pass
-        
-        if not address or not Web3.is_address(address):
-            return web.json_response({"ok": False, "error": "Invalid address"}, headers=cors_headers)
-
-        try:
-            # Используем GoPlus (Сеть 204 = opBNB)
-            url = f"https://api.gopluslabs.io/api/v1/token_approvals?chain_id=204&user_address={address}"
-            async with http_session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                raw_approvals = data.get("result", [])
-                
-                clean_approvals = []
-                for token in raw_approvals:
-                    token_addr = token.get("token_address")
-                    token_name = token.get("token_name", "Unknown")
-                    for spender in token.get("approved_list", []):
-                        allowance = spender.get("allowance")
-                        if allowance and allowance != "0":
-                            clean_approvals.append({
-                                "tokenAddress": token_addr,
-                                "tokenName": token_name,
-                                "spenderAddress": spender.get("approved_contract"),
-                                "amount": allowance,
-                                "risk": "high" if spender.get("is_danger") == 1 else "low"
-                            })
-                return web.json_response({"ok": True, "approvals": clean_approvals}, headers=cors_headers)
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, headers=cors_headers)
-
-    app = web.Application()
-    app.router.add_get("/", handle)
-    app.router.add_post("/webapp/connect", handle_webapp_connect)
-    app.router.add_get("/webapp/approvals", handle_webapp_approvals)
-    app.router.add_post("/webapp/approvals", handle_webapp_approvals)
-    app.router.add_options("/{tail:.*}", handle_webapp_connect_options)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=port)
-    await site.start()
-    logger.info("✅ Health server listening on 0.0.0.0:%d", port)
-
+    logger.info("🚀 _run_health_server: попытка запуска...")
     try:
-        while not _shutdown:
-            await asyncio.sleep(1)
-    finally:
-        await runner.cleanup()
-        logger.info("✅ Health server stopped")
+        from aiohttp import web
+        port = int(os.getenv("PORT", "8080"))
+        logger.info(f"🔄 _run_health_server: порт {port}")
+        cors_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "86400",
+        }
+
+        async def handle(_):
+            return web.Response(text="ok", headers=cors_headers)
+
+        async def handle_webapp_connect(request):
+            logger.info(f"📥 POST /webapp/connect вызван от {request.remote}")
+            try:
+                payload = await request.json()
+            except Exception:
+                logger.warning("❌ Ошибка парсинга JSON в /webapp/connect")
+                return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
+
+            nonce = str(payload.get("nonce", "")).strip()
+            address = str(payload.get("address", "")).strip()
+            signature = str(payload.get("signature", "").strip())
+            logger.info(f"📦 /webapp/connect данные: nonce={nonce[:8]}..., address={address[:8]}...")
+
+            if not nonce or not address or not signature:
+                logger.warning("❌ Отсутствуют обязательные поля в /webapp/connect")
+                return web.json_response({"ok": False, "error": "missing fields"}, status=400, headers=cors_headers)
+
+            uid: Optional[int] = None
+            async with db_lock:
+                for uid_str, p in db.get("pending_verifications", {}).items():
+                    if str(p.get("nonce", "")) == nonce:
+                        try:
+                            uid = int(uid_str)
+                        except Exception:
+                            uid = None
+                        break
+
+            if uid is None:
+                logger.warning(f"❌ Сессия не найдена для nonce={nonce[:8]}...")
+                return web.json_response({"ok": False, "error": "session not found"}, status=404, headers=cors_headers)
+
+            success, message = await verify_wallet(uid, address, signature)
+            if success:
+                await safe_send(
+                    uid,
+                    f"✅ <b>Кошелёк подключён!</b>\n"
+                    f"<code>{esc(address.lower())}</code>\n\n"
+                    f"Теперь ты получаешь личные алерты о всех транзакциях "
+                    f"этого адреса.",
+                )
+                # После успешной верификации запускаем минт Guardian в фоне
+                asyncio.create_task(mint_guardian_for_user(uid))
+                logger.info(f"✅ Кошелёк подключен и минт Guardian запущен для user_id={uid}")
+                return web.json_response({"ok": True}, headers=cors_headers)
+
+            return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
+
+        async def handle_approvals(request):
+            logger.info(f"📥 {request.method} /webapp/approvals вызван от {request.remote}")
+            address = None
+            if request.method == "POST":
+                try:
+                    data = await request.json()
+                    address = data.get("address")
+                except: pass
+            elif request.method == "GET":
+                address = request.query.get("address")
+        
+            if not address or not Web3.is_address(address):
+                logger.warning(f"❌ Невалидный адрес: {address}")
+                return web.json_response({"ok": False, "error": "Invalid address"}, headers=cors_headers)
+
+            try:
+                # Используем GoPlus (Сеть 204 = opBNB)
+                url = f"https://api.gopluslabs.io/api/v1/token_approvals?chain_id=204&user_address={address}"
+                async with http_session.get(url, timeout=10) as resp:
+                    data = await resp.json()
+                    raw_approvals = data.get("result", [])
+                    
+                    clean_approvals = []
+                    for token in raw_approvals:
+                        token_addr = token.get("token_address")
+                        token_name = token.get("token_name", "Unknown")
+                        for spender in token.get("approved_list", []):
+                            allowance = spender.get("allowance")
+                            if allowance and allowance != "0":
+                                clean_approvals.append({
+                                    "tokenAddress": token_addr,
+                                    "tokenName": token_name,
+                                    "spenderAddress": spender.get("approved_contract"),
+                                    "amount": allowance,
+                                    "risk": "high" if spender.get("is_danger") == 1 else "low"
+                                })
+                    logger.info(f"✅ Найдено {len(clean_approvals)} approvals для {address[:8]}...")
+                    return web.json_response({"ok": True, "approvals": clean_approvals}, headers=cors_headers)
+            except Exception as e:
+                logger.error(f"❌ Ошибка в /webapp/approvals: {e}")
+                return web.json_response({"ok": False, "error": str(e)}, headers=cors_headers)
+
+        async def handle_webapp_approvals(request):
+            return await handle_approvals(request)
+
+        async def handle_webapp_connect_options(_):
+            return web.Response(headers=cors_headers)
+
+        logger.info("🔧 Создание приложения и регистрация роутов...")
+        app = web.Application()
+        app.router.add_get("/", handle)
+        app.router.add_post("/webapp/connect", handle_webapp_connect)
+        app.router.add_get("/webapp/approvals", handle_webapp_approvals)
+        app.router.add_post("/webapp/approvals", handle_webapp_approvals)
+        app.router.add_options("/{tail:.*}", handle_webapp_connect_options)
+        
+        logger.info("🚀 Запуск AppRunner и TCPSite...")
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host="0.0.0.0", port=port)
+        await site.start()
+        logger.info(f"✅ Health server listening on 0.0.0.0:{port}")
+
+        try:
+            while not _shutdown:
+                await asyncio.sleep(1)
+        finally:
+            await runner.cleanup()
+            logger.info("✅ Health server stopped")
+            
+    except Exception as e:
+        logger.error(f"❌ _run_health_server упал с ошибкой: {e}", exc_info=True)
+        raise  # можно не выбрасывать, чтобы задача завершилась, но ошибка залогирована
 
 
 # ---------------------------------------------------------------------------
