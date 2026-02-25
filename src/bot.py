@@ -1078,6 +1078,29 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
     return True, "✅ Кошелёк успешно привязан"
 
 
+async def mint_guardian_for_user(uid: int):
+    """Фоновая задача для минта Guardian NFT пользователю"""
+    try:
+        token_id = await mint_guardian(
+            name=f"Guardian_{uid}",
+            image_uri="https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png"
+        )
+        await safe_send(
+            uid,
+            f"🛡️ <b>Вам выдан Guardian NFT!</b>\n"
+            f"Token ID: <code>{token_id}</code>\n\n"
+            f"Теперь ваш персональный Neural Guardian следит за безопасностью активов!"
+        )
+        async with db_lock:
+            if "user_guardians" not in db:
+                db["user_guardians"] = {}
+            db["user_guardians"][str(uid)] = token_id
+        await save_db()
+        logger.info(f"🛡️ Guardian NFT заминчен: token_id={token_id} для user_id={uid}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка минта Guardian для user_id={uid}: {e}", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ТЕКСТА
 # ---------------------------------------------------------------------------
@@ -1586,6 +1609,26 @@ async def cmd_disconnect(m: types.Message) -> None:
     await bot.reply_to(m, "Выбери кошелёк для отключения:", reply_markup=kb)
 
 
+@bot.message_handler(commands=["stats"])
+async def cmd_stats(m: types.Message):
+    async with db_lock:
+        whales = db["stats"]["whales"]
+        blocks = db["stats"]["blocks"]
+        threats = db["stats"]["threats"]
+        limit = db["cfg"]["limit_usd"]
+    
+    text = (
+        f"📊 <b>VibeGuard Stats</b>\n\n"
+        f"🐳 Китов обнаружено: <b>{whales}</b>\n"
+        f"🛡️ Угроз выявлено: <b>{threats}</b>\n"
+        f"📦 Блоков обработано: <b>{blocks:,}</b>\n"
+        f"⚙️ Текущий лимит: <b>${limit}</b>\n"
+        f"🧠 AI: Groq / DeepSeek\n"
+        f"🔗 Сеть: opBNB"
+    )
+    await bot.reply_to(m, text)
+
+
 @bot.message_handler(commands=["check"])
 async def cmd_check(m: types.Message) -> None:
     args = m.text.split()
@@ -1755,6 +1798,7 @@ async def cmd_limit(m: types.Message) -> None:
                 return
             async with db_lock:
                 db["cfg"]["limit_usd"] = v
+                logger.info(f"Лимит изменён на {v}")  # временно
             await save_db()
             await bot.reply_to(m, f"✅ Лимит китов изменён: <b>${v:,.0f}</b>")
         except ValueError:
@@ -2118,6 +2162,8 @@ async def _run_health_server() -> None:
                 f"Теперь ты получаешь личные алерты о всех транзакциях "
                 f"этого адреса.",
             )
+            # После успешной верификации запускаем минт Guardian в фоне
+            asyncio.create_task(mint_guardian_for_user(uid))
             return web.json_response({"ok": True}, headers=cors_headers)
 
         return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
