@@ -108,6 +108,7 @@ def _sync_mint_guardian(name: str, image_uri: str):
             'gasPrice': gas_price
         })
         signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
+        
         # Универсальное получение raw transaction
         raw_tx = (
             getattr(signed_tx, 'raw_transaction', None) or 
@@ -116,24 +117,41 @@ def _sync_mint_guardian(name: str, image_uri: str):
         )
         if raw_tx is None:
             raise AttributeError("Cannot find raw transaction attribute in signed object")
+        
         tx_hash = w3.eth.send_raw_transaction(raw_tx)
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
 
-        # Вычисляем topic события GuardianMinted(address,uint256,string)
+        # 🔍 Логируем все логи для отладки
+        for i, log in enumerate(receipt.logs):
+            topics_hex = [t.hex() for t in log['topics']] if log['topics'] else []
+            logger.info(f"📄 Log {i}: address={log['address']}, topics={topics_hex}")
+
+        # Вычисляем topic события GuardianMinted (предполагаемая сигнатура)
         guardian_minted_topic = Web3.keccak(text="GuardianMinted(address,uint256,string)").hex()
+        logger.info(f"🔍 Ожидаемый topic: {guardian_minted_topic}")
 
         token_id = None
         for log in receipt.logs:
-            if log['topics'][0].hex() == guardian_minted_topic:
-                # Предполагаем, что tokenId индексирован и лежит в topics[2]
-                token_id = int(log['topics'][2].hex(), 16)
+            if log['topics'] and log['topics'][0].hex() == guardian_minted_topic:
+                # Событие найдено, извлекаем tokenId. Обычно он во втором индексированном параметре (topics[2])
+                if len(log['topics']) >= 3:
+                    token_id = int(log['topics'][2].hex(), 16)
+                elif len(log['topics']) >= 2:
+                    token_id = int(log['topics'][1].hex(), 16)
+                else:
+                    token_id = None
                 break
 
         if token_id is None:
-            # Fallback: если событие не найдено, пробуем взять из первого лога (как раньше)
+            # Fallback: пробуем взять из первого лога (на случай другой сигнатуры)
             if receipt.logs:
-                token_id = int(receipt.logs[0]['topics'][2].hex(), 16)
-                logger.warning(f"GuardianMinted event not found, using fallback token_id={token_id}")
+                # Попробуем topics[2] первого лога
+                if len(receipt.logs[0]['topics']) >= 3:
+                    token_id = int(receipt.logs[0]['topics'][2].hex(), 16)
+                    logger.warning(f"GuardianMinted event not found, using fallback token_id={token_id}")
+                else:
+                    token_id = 0
+                    logger.error("No suitable topics in logs, token_id set to 0")
             else:
                 token_id = 0
                 logger.error("No logs in receipt, token_id set to 0")
