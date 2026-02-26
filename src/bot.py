@@ -1843,20 +1843,23 @@ async def cmd_limit(m: types.Message) -> None:
 
 @bot.message_handler(commands=["debug_limit"])
 async def cmd_debug_limit(m: types.Message):
-    """Показывает текущее значение лимита в памяти и в БД (после сохранения)"""
+    """Показывает текущее значение лимита в памяти и в БД"""
     async with db_lock:
         mem_limit = db["cfg"]["limit_usd"]
-    # Принудительно загрузим из БД (если есть pool)
-    db_limit = mem_limit
+    # Читаем напрямую из PostgreSQL
+    db_limit = None
     if pool:
         try:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow("SELECT data FROM bot_data WHERE id = 1")
                 if row:
                     data = json.loads(row['data'])
-                    db_limit = data.get("cfg", {}).get("limit_usd", mem_limit)
-        except:
-            pass
+                    db_limit = data.get("cfg", {}).get("limit_usd")
+        except Exception as e:
+            db_limit = f"Ошибка: {e}"
+    else:
+        db_limit = "pool не инициализирован"
+    
     await bot.reply_to(
         m,
         f"🧠 Лимит в памяти: <b>{mem_limit}</b>\n"
@@ -1866,19 +1869,23 @@ async def cmd_debug_limit(m: types.Message):
 
 @bot.message_handler(commands=["set_limit_test"])
 async def cmd_set_limit_test(m: types.Message):
-    """Тестовая установка лимита (для проверки)"""
+    """Тестовая установка лимита (только для владельца)"""
+    if not is_owner(m.from_user.id):
+        return
     args = m.text.split()
-    if len(args) < 2 or not is_owner(m.from_user.id):
+    if len(args) < 2:
+        await bot.reply_to(m, "Использование: /set_limit_test 5000")
         return
     try:
         new_limit = float(args[1])
         async with db_lock:
+            old = db["cfg"]["limit_usd"]
             db["cfg"]["limit_usd"] = new_limit
-            logger.info(f"🧪 Тестовый лимит установлен в памяти: {new_limit}")
+            logger.info(f"🧪 Тестовый лимит в памяти изменён с {old} на {new_limit}")
         await save_db()
         await bot.reply_to(m, f"✅ Лимит в памяти установлен: {new_limit}, БД сохранена")
-    except:
-        await bot.reply_to(m, "Ошибка")
+    except Exception as e:
+        await bot.reply_to(m, f"Ошибка: {e}")
 
 
 @bot.message_handler(commands=["watch"])
