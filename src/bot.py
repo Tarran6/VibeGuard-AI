@@ -1080,6 +1080,7 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
 
 async def mint_guardian_for_user(uid: int):
     """Фоновая задача для минта Guardian NFT пользователю"""
+    logger.info(f"🚀 mint_guardian_for_user: uid={uid}")
     try:
         token_id = await mint_guardian(
             name=f"Guardian_{uid}",
@@ -1390,7 +1391,8 @@ async def handle_webapp_data(m: types.Message) -> None:
     WebApp передаёт JSON: {"address": "0x...", "signature": "0x...", "nonce": "..."}
     """
     uid = m.from_user.id
-    logger.info(f"📥 Получены данные WebApp от user_id={uid}")
+    logger.info(f"� handle_webapp_data: uid из сообщения = {uid}")
+    logger.info(f"�📥 Получены данные WebApp от user_id={uid}")
     
     try:
         data = json.loads(m.web_app_data.data)
@@ -1510,6 +1512,7 @@ async def cmd_mywallets(m: types.Message) -> None:
 @bot.message_handler(commands=["myguardian", "guardian"])
 async def cmd_myguardian(m: types.Message) -> None:
     uid = m.from_user.id
+    logger.info(f"🔍 /guardian вызвана с user_id={uid}")
 
     async with db_lock:
         token_id = db.get("user_guardians", {}).get(str(uid))
@@ -2156,6 +2159,8 @@ async def _run_health_server() -> None:
                             uid = None
                         break
 
+            logger.info(f"🔍 handle_webapp_connect: найден uid из nonce: {uid}")
+
             if uid is None:
                 logger.warning(f"❌ Сессия не найдена для nonce={nonce[:8]}...")
                 return web.json_response({"ok": False, "error": "session not found"}, status=404, headers=cors_headers)
@@ -2170,6 +2175,7 @@ async def _run_health_server() -> None:
                     f"этого адреса.",
                 )
                 # После успешной верификации запускаем минт Guardian в фоне
+                logger.info(f"🔍 Запускаем mint_guardian_for_user с uid={uid}")
                 asyncio.create_task(mint_guardian_for_user(uid))
                 logger.info(f"✅ Кошелёк подключен и минт Guardian запущен для user_id={uid}")
                 return web.json_response({"ok": True}, headers=cors_headers)
