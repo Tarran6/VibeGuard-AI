@@ -1392,7 +1392,7 @@ async def handle_webapp_data(m: types.Message) -> None:
     """
     uid = m.from_user.id
     logger.info(f"� handle_webapp_data: uid из сообщения = {uid}")
-    logger.info(f"�📥 Получены данные WebApp от user_id={uid}")
+    logger.info(f"� Получены данные WebApp от user_id={uid}")
     
     try:
         data = json.loads(m.web_app_data.data)
@@ -1550,20 +1550,24 @@ Token ID: <code>{token_id}</code>
 """
 
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔄 Обновить данные", callback_data=f"refresh_guardian:{token_id}"))
+    kb.add(types.InlineKeyboardButton("🔄 Обновить данные", callback_data="refresh_guardian"))
 
     await bot.reply_to(m, text, reply_markup=kb, disable_web_page_preview=True)
 
 
 # Callback для кнопки "Обновить данные"
-@bot.callback_query_handler(func=lambda c: c.data.startswith("refresh_guardian:"))
+@bot.callback_query_handler(func=lambda c: c.data == "refresh_guardian")
 async def cb_refresh_guardian(c: types.CallbackQuery):
+    uid = c.from_user.id
+    async with db_lock:
+        token_id = db.get("user_guardians", {}).get(str(uid))
+    if not token_id:
+        await bot.answer_callback_query(c.id, "❌ NFT не найден", show_alert=True)
+        return
     try:
-        token_id = int(c.data.split(":")[1])
         protected = contract.functions.protectedAmount(token_id).call()
         scans = contract.functions.scanCount(token_id).call()
         protected_usd = protected / 1_000_000
-
         text = f"""
 🛡️ <b>Твой Guardian NFT</b>
 
@@ -1574,17 +1578,9 @@ Token ID: <code>{token_id}</code>
 
 🔗 <a href="https://opbnbscan.com/token/{os.getenv('NFA_CONTRACT_ADDRESS')}?a={token_id}">Посмотреть на opbnbscan</a>
 """
-
         kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("🔄 Обновить данные", callback_data=f"refresh_guardian:{token_id}"))
-
-        await bot.edit_message_text(
-            text,
-            chat_id=c.message.chat.id,
-            message_id=c.message.message_id,
-            reply_markup=kb,
-            disable_web_page_preview=True
-        )
+        kb.add(types.InlineKeyboardButton("🔄 Обновить данные", callback_data="refresh_guardian"))
+        await bot.edit_message_text(text, c.message.chat.id, c.message.message_id, reply_markup=kb, disable_web_page_preview=True)
         await bot.answer_callback_query(c.id, "✅ Данные обновлены")
     except Exception as e:
         logger.error(f"refresh_guardian error: {e}")
