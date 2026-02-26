@@ -1248,8 +1248,8 @@ async def cmd_connect(m: types.Message) -> None:
             callback_data="webapp_not_configured",
         ))
 
-    await bot.reply_to(
-        m,
+    await bot.send_message(
+        m.chat.id,
         "👛 <b>Подключение кошелька</b>\n\n"
         "Нажми кнопку ниже и выбери любой кошелёк из списка.\n\n"
         "<i>Сессия действительна 10 минут.</i>",
@@ -1537,17 +1537,23 @@ async def cmd_mywallets(m: types.Message) -> None:
 # КОМАНДА /myguardian — персональный Guardian NFT
 # =============================================================================
 @bot.message_handler(commands=["myguardian", "guardian"])
-async def cmd_myguardian(m: types.Message) -> None:
+async def cmd_myguardian(m: types.Message, delete_previous: types.Message = None) -> None:
     uid = m.from_user.id
     logger.info(f"🔍 /guardian вызвана с user_id={uid}")
+    
+    if delete_previous:
+        try:
+            await bot.delete_message(delete_previous.chat.id, delete_previous.message_id)
+        except:
+            pass
 
     async with db_lock:
         token_id = db.get("user_guardians", {}).get(str(uid))
         if not token_id:
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton("🔗 Получить Guardian", callback_data="connect_new"))
-            await bot.reply_to(
-                m,
+            await bot.send_message(
+                m.chat.id,
                 "👛 У тебя пока нет Guardian NFT.\n\n"
                 "Подключи кошелёк и получи своего персонального Neural Guardian!",
                 reply_markup=kb
@@ -1579,7 +1585,7 @@ Token ID: <code>{token_id}</code>
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔄 Обновить данные", callback_data="refresh_guardian"))
 
-    await bot.reply_to(m, text, reply_markup=kb, disable_web_page_preview=True)
+    await bot.send_message(m.chat.id, text, reply_markup=kb, disable_web_page_preview=True)
 
 
 # Callback для кнопки "Обновить данные"
@@ -1627,7 +1633,7 @@ async def cmd_disconnect(m: types.Message) -> None:
         wallets = list(db["connected_wallets"].get(str(uid), []))
 
     if not wallets:
-        await bot.reply_to(m, "У тебя нет подключённых кошельков.")
+        await bot.send_message(m.chat.id, "У тебя нет подключённых кошельков.")
         return
 
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -1638,11 +1644,17 @@ async def cmd_disconnect(m: types.Message) -> None:
             callback_data=f"dc:{uid}:{i}",
         ))
     kb.add(types.InlineKeyboardButton("Отмена", callback_data="dc:cancel"))
-    await bot.reply_to(m, "Выбери кошелёк для отключения:", reply_markup=kb)
+    await bot.send_message(m.chat.id, "Выбери кошелёк для отключения:", reply_markup=kb)
 
 
 @bot.message_handler(commands=["stats"])
-async def cmd_stats(m: types.Message):
+async def cmd_stats(m: types.Message, delete_previous: types.Message = None):
+    if delete_previous:
+        try:
+            await bot.delete_message(delete_previous.chat.id, delete_previous.message_id)
+        except:
+            pass
+    
     async with db_lock:
         whales = db["stats"]["whales"]
         blocks = db["stats"]["blocks"]
@@ -1658,21 +1670,21 @@ async def cmd_stats(m: types.Message):
         f"🧠 AI: Groq / DeepSeek\n"
         f"🔗 Сеть: opBNB"
     )
-    await bot.reply_to(m, text)
+    await bot.send_message(m.chat.id, text)
 
 
 @bot.message_handler(commands=["check"])
 async def cmd_check(m: types.Message) -> None:
     args = m.text.split()
     if len(args) < 2:
-        await bot.reply_to(m, "Пример: /check 0xКОНТРАКТ")
+        await bot.send_message(m.chat.id, "Пример: /check 0xКОНТРАКТ")
         return
     addr = args[1].strip()
     if not Web3.is_address(addr):
-        await bot.reply_to(m, "❌ Невалидный адрес.")
+        await bot.send_message(m.chat.id, "❌ Невалидный адрес.")
         return
 
-    wait = await bot.reply_to(m, "🔍 Проверяю контракт...")
+    wait = await bot.send_message(m.chat.id, "🔍 Проверяю контракт...")
     risks = await check_scam(addr)
 
     score = 25 if risks else 85
@@ -1795,35 +1807,46 @@ async def perform_audit(addr: str, chat_id: int, reply_to_message_id: int = None
 async def cmd_audit(m: types.Message):
     args = m.text.split()
     if len(args) < 2:
-        return await bot.reply_to(m, "Пример: `/audit 0x...`")
+        return await bot.send_message(m.chat.id, "Пример: `/audit 0x...`")
     
     addr = args[1].strip()
     await perform_audit(addr, m.chat.id, m.message_id)
 
 
 @bot.message_handler(commands=["status", "stats"])
-async def cmd_status(m: types.Message) -> None:
+async def cmd_status(m: types.Message, delete_previous: types.Message = None) -> None:
+    if delete_previous:
+        try:
+            await bot.delete_message(delete_previous.chat.id, delete_previous.message_id)
+        except:
+            pass
+    
     text = await get_status_text()
-    await bot.reply_to(m, text)
+    await bot.send_message(m.chat.id, text)
 
 
 @bot.message_handler(commands=["limit"])
-async def cmd_limit(m: types.Message) -> None:
+async def cmd_limit(m: types.Message, delete_previous: types.Message = None) -> None:
     if m.text is None:
+        if delete_previous:
+            try:
+                await bot.delete_message(delete_previous.chat.id, delete_previous.message_id)
+            except:
+                pass
         text = await get_limit_text()
-        await bot.reply_to(m, text)
+        await bot.send_message(m.chat.id, text)
         return
 
     args = m.text.split()
     if len(args) > 1:
         if not is_owner(m.from_user.id):
-            await bot.reply_to(m, "⛔ Только для владельца бота.")
+            await bot.send_message(m.chat.id, "⛔ Только для владельца бота.")
             return
         try:
             v = float(args[1])
             if v < LIMIT_MIN_USD:
-                await bot.reply_to(
-                    m,
+                await bot.send_message(
+                    m.chat.id,
                     f"❌ Минимальный лимит: <b>${LIMIT_MIN_USD:,.0f}</b>. "
                     f"Пример: /limit 100",
                 )
@@ -1833,12 +1856,17 @@ async def cmd_limit(m: types.Message) -> None:
                 logger.info(f"🔍 /limit: внутри db_lock значение установлено = {db['cfg']['limit_usd']}")
             await save_db()
             logger.info(f"🔍 /limit: после save_db, значение в db = {db['cfg']['limit_usd']}")
-            await bot.reply_to(m, f"✅ Лимит китов изменён: <b>${v:,.0f}</b>")
+            await bot.send_message(m.chat.id, f"✅ Лимит китов изменён: <b>${v:,.0f}</b>")
         except ValueError:
-            await bot.reply_to(m, f"❌ Укажите число от {LIMIT_MIN_USD:.0f}. Пример: /limit 100")
+            await bot.send_message(m.chat.id, f"❌ Укажите число от {LIMIT_MIN_USD:.0f}. Пример: /limit 100")
     else:
+        if delete_previous:
+            try:
+                await bot.delete_message(delete_previous.chat.id, delete_previous.message_id)
+            except:
+                pass
         text = await get_limit_text()
-        await bot.reply_to(m, text)
+        await bot.send_message(m.chat.id, text)
 
 
 @bot.message_handler(commands=["debug_limit"])
@@ -1860,8 +1888,8 @@ async def cmd_debug_limit(m: types.Message):
     else:
         db_limit = "pool не инициализирован"
     
-    await bot.reply_to(
-        m,
+    await bot.send_message(
+        m.chat.id,
         f"🧠 Лимит в памяти: <b>{mem_limit}</b>\n"
         f"💾 Лимит в PostgreSQL: <b>{db_limit}</b>"
     )
@@ -1874,7 +1902,7 @@ async def cmd_set_limit_test(m: types.Message):
         return
     args = m.text.split()
     if len(args) < 2:
-        await bot.reply_to(m, "Использование: /set_limit_test 5000")
+        await bot.send_message(m.chat.id, "Использование: /set_limit_test 5000")
         return
     try:
         new_limit = float(args[1])
@@ -1883,9 +1911,9 @@ async def cmd_set_limit_test(m: types.Message):
             db["cfg"]["limit_usd"] = new_limit
             logger.info(f"🧪 Тестовый лимит в памяти изменён с {old} на {new_limit}")
         await save_db()
-        await bot.reply_to(m, f"✅ Лимит в памяти установлен: {new_limit}, БД сохранена")
+        await bot.send_message(m.chat.id, f"✅ Лимит в памяти установлен: {new_limit}, БД сохранена")
     except Exception as e:
-        await bot.reply_to(m, f"Ошибка: {e}")
+        await bot.send_message(m.chat.id, f"Ошибка: {e}")
 
 
 @bot.message_handler(commands=["watch"])
@@ -1893,15 +1921,15 @@ async def cmd_watch(m: types.Message) -> None:
     if not is_owner(m.from_user.id): return
     args = m.text.split()
     if len(args) < 2:
-        await bot.reply_to(m, "Пример: /watch 0xADDRESS"); return
+        await bot.send_message(m.chat.id, "Пример: /watch 0xADDRESS"); return
     addr = args[1].lower()
     if not Web3.is_address(addr):
-        await bot.reply_to(m, "❌ Невалидный адрес"); return
+        await bot.send_message(m.chat.id, "❌ Невалидный адрес"); return
     async with db_lock:
         if addr not in db["cfg"]["watch"]:
             db["cfg"]["watch"].append(addr)
     await save_db()
-    await bot.reply_to(m, f"✅ Watchlist:\n<code>{esc(addr)}</code>")
+    await bot.send_message(m.chat.id, f"✅ Watchlist:\n<code>{esc(addr)}</code>")
 
 
 @bot.message_handler(commands=["unwatch"])
@@ -1909,16 +1937,16 @@ async def cmd_unwatch(m: types.Message) -> None:
     if not is_owner(m.from_user.id): return
     args = m.text.split()
     if len(args) < 2:
-        await bot.reply_to(m, "Пример: /unwatch 0xADDRESS"); return
+        await bot.send_message(m.chat.id, "Пример: /unwatch 0xADDRESS"); return
     addr = args[1].lower()
     async with db_lock:
         found = addr in db["cfg"]["watch"]
         if found: db["cfg"]["watch"].remove(addr)
     if found:
         await save_db()
-        await bot.reply_to(m, f"✅ Удалён из watchlist:\n<code>{esc(addr)}</code>")
+        await bot.send_message(m.chat.id, f"✅ Удалён из watchlist:\n<code>{esc(addr)}</code>")
     else:
-        await bot.reply_to(m, "Адрес не найден в watchlist")
+        await bot.send_message(m.chat.id, "Адрес не найден в watchlist")
 
 
 @bot.message_handler(commands=["ignore"])
@@ -1926,15 +1954,15 @@ async def cmd_ignore(m: types.Message) -> None:
     if not is_owner(m.from_user.id): return
     args = m.text.split()
     if len(args) < 2:
-        await bot.reply_to(m, "Пример: /ignore 0xADDRESS"); return
+        await bot.send_message(m.chat.id, "Пример: /ignore 0xADDRESS"); return
     addr = args[1].lower()
     if not Web3.is_address(addr):
-        await bot.reply_to(m, "❌ Невалидный адрес"); return
+        await bot.send_message(m.chat.id, "❌ Невалидный адрес"); return
     async with db_lock:
         if addr not in db["cfg"]["ignore"]:
             db["cfg"]["ignore"].append(addr)
     await save_db()
-    await bot.reply_to(m, f"✅ Ignore:\n<code>{esc(addr)}</code>")
+    await bot.send_message(m.chat.id, f"✅ Ignore:\n<code>{esc(addr)}</code>")
 
 
 @bot.message_handler(commands=["unignore"])
@@ -1942,28 +1970,28 @@ async def cmd_unignore(m: types.Message) -> None:
     if not is_owner(m.from_user.id): return
     args = m.text.split()
     if len(args) < 2:
-        await bot.reply_to(m, "Пример: /unignore 0xADDRESS"); return
+        await bot.send_message(m.chat.id, "Пример: /unignore 0xADDRESS"); return
     addr = args[1].lower()
     async with db_lock:
         found = addr in db["cfg"]["ignore"]
         if found: db["cfg"]["ignore"].remove(addr)
     if found:
         await save_db()
-        await bot.reply_to(m, f"✅ Удалён из ignore:\n<code>{esc(addr)}</code>")
+        await bot.send_message(m.chat.id, f"✅ Удалён из ignore:\n<code>{esc(addr)}</code>")
     else:
-        await bot.reply_to(m, "Адрес не найден")
+        await bot.send_message(m.chat.id, "Адрес не найден")
 
 
 @bot.message_handler(commands=["cancel"])
 async def cmd_cancel(m: types.Message) -> None:
     clear_state(m.from_user.id)
-    await bot.reply_to(m, "✅ Отменено.")
+    await bot.send_message(m.chat.id, "✅ Отменено.")
 
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id) == "ask_ai")
 async def handle_ask_ai(m: types.Message) -> None:
     clear_state(m.from_user.id)
-    wait = await bot.reply_to(m, "⏳ AI думает...")
+    wait = await bot.send_message(m.chat.id, "⏳ AI думает...")
     async with ai_sem:
         answer = await call_ai(
             f"{m.text}\n\nОтвечай на русском языке. Без HTML-тегов."
@@ -2434,7 +2462,7 @@ async def handle_limit_input(m: types.Message) -> None:
         min_allowed = 1.0 if is_owner(uid) else 3000.0
         
         if val < min_allowed:
-            await bot.reply_to(m, f"❌ Минимальный лимит: ${min_allowed:,.0f}")
+            await bot.send_message(m.chat.id, f"❌ Минимальный лимит: ${min_allowed:,.0f}")
             return
 
         async with db_lock:
@@ -2442,9 +2470,9 @@ async def handle_limit_input(m: types.Message) -> None:
             db["user_limits"][str(uid)] = val
         await save_db()
         clear_state(uid)
-        await bot.reply_to(m, f"✅ Твой личный лимит установлен: <b>${val:,.0f}</b>", reply_markup=get_main_menu_keyboard())
+        await bot.send_message(m.chat.id, f"✅ Твой личный лимит установлен: <b>${val:,.0f}</b>", reply_markup=get_main_menu_keyboard())
     except ValueError:
-        await bot.reply_to(m, "❌ Введи просто число (например: 5000)")
+        await bot.send_message(m.chat.id, "❌ Введи просто число (например: 5000)")
 
 
 if __name__ == "__main__":
