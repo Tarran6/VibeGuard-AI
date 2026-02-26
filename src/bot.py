@@ -2465,12 +2465,23 @@ async def handle_limit_input(m: types.Message) -> None:
             await bot.send_message(m.chat.id, f"❌ Минимальный лимит: ${min_allowed:,.0f}")
             return
 
-        async with db_lock:
-            if "user_limits" not in db: db["user_limits"] = {}
-            db["user_limits"][str(uid)] = val
-        await save_db()
-        clear_state(uid)
-        await bot.send_message(m.chat.id, f"✅ Твой личный лимит установлен: <b>${val:,.0f}</b>", reply_markup=get_main_menu_keyboard())
+        if is_owner(uid):
+            # Для владельца меняем глобальный лимит
+            async with db_lock:
+                db["cfg"]["limit_usd"] = val
+                logger.info(f"🔧 Глобальный лимит изменён через настройки на {val}")
+            await save_db()
+            clear_state(uid)
+            await bot.send_message(m.chat.id, f"✅ Глобальный лимит китов изменён: <b>${val:,.0f}</b>", reply_markup=get_main_menu_keyboard())
+        else:
+            # Для обычных пользователей сохраняем персональный лимит
+            async with db_lock:
+                if "user_limits" not in db:
+                    db["user_limits"] = {}
+                db["user_limits"][str(uid)] = val
+            await save_db()
+            clear_state(uid)
+            await bot.send_message(m.chat.id, f"✅ Твой личный лимит установлен: <b>${val:,.0f}</b>", reply_markup=get_main_menu_keyboard())
     except ValueError:
         await bot.send_message(m.chat.id, "❌ Введи просто число (например: 5000)")
 
