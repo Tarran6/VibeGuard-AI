@@ -268,7 +268,7 @@ async def init_db():
                 loaded_data = json.loads(row['data'])
                 db.update({**_DB_DEFAULT, **loaded_data})
                 logger.info("✅ Статистика успешно загружена из PostgreSQL")
-                logger.info(f"🔍 Загруженный лимит: {db['cfg']['limit_usd']}")
+                logger.info(f"🔍 init_db: загруженный лимит из БД = {db['cfg']['limit_usd']}")
             else:
                 # Если база пустая, создаем первую запись
                 db.update(_DB_DEFAULT.copy())
@@ -285,7 +285,9 @@ async def init_db():
         db.update(_DB_DEFAULT.copy())
 
 async def save_db():
-    if not pool: return
+    if not pool: 
+        logger.warning("⚠️ save_db: pool отсутствует, сохранение пропущено")
+        return
     try:
         async with pool.acquire() as conn:
             await conn.execute(
@@ -1276,6 +1278,11 @@ async def handle_menu_callback(c: types.CallbackQuery):
 
     if action == "mywallets":
         await bot.answer_callback_query(c.id)
+        # Удаляем сообщение с меню
+        try:
+            await bot.delete_message(message.chat.id, message.message_id)
+        except:
+            pass
         # Создаем объект message для вызова cmd_mywallets
         class FakeMessage:
             def __init__(self, chat_id, from_user):
@@ -1823,19 +1830,55 @@ async def cmd_limit(m: types.Message) -> None:
                 return
             async with db_lock:
                 db["cfg"]["limit_usd"] = v
-                logger.info(f"Лимит изменён на {v}")  # временно
-                logger.info(f"🔍 БД до сохранения: limit_usd={db['cfg']['limit_usd']}")
+                logger.info(f"🔍 /limit: внутри db_lock значение установлено = {db['cfg']['limit_usd']}")
             await save_db()
-            logger.info(f"✅ Лимит сохранён в БД, новое значение: {v}")
-            # Проверяем, что сохранилось
-            async with db_lock:
-                logger.info(f"🔍 БД после сохранения: limit_usd={db['cfg']['limit_usd']}")
+            logger.info(f"🔍 /limit: после save_db, значение в db = {db['cfg']['limit_usd']}")
             await bot.reply_to(m, f"✅ Лимит китов изменён: <b>${v:,.0f}</b>")
         except ValueError:
             await bot.reply_to(m, f"❌ Укажите число от {LIMIT_MIN_USD:.0f}. Пример: /limit 100")
     else:
         text = await get_limit_text()
         await bot.reply_to(m, text)
+
+
+@bot.message_handler(commands=["debug_limit"])
+async def cmd_debug_limit(m: types.Message):
+    """Показывает текущее значение лимита в памяти и в БД (после сохранения)"""
+    async with db_lock:
+        mem_limit = db["cfg"]["limit_usd"]
+    # Принудительно загрузим из БД (если есть pool)
+    db_limit = mem_limit
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT data FROM bot_data WHERE id = 1")
+                if row:
+                    data = json.loads(row['data'])
+                    db_limit = data.get("cfg", {}).get("limit_usd", mem_limit)
+        except:
+            pass
+    await bot.reply_to(
+        m,
+        f"🧠 Лимит в памяти: <b>{mem_limit}</b>\n"
+        f"💾 Лимит в PostgreSQL: <b>{db_limit}</b>"
+    )
+
+
+@bot.message_handler(commands=["set_limit_test"])
+async def cmd_set_limit_test(m: types.Message):
+    """Тестовая установка лимита (для проверки)"""
+    args = m.text.split()
+    if len(args) < 2 or not is_owner(m.from_user.id):
+        return
+    try:
+        new_limit = float(args[1])
+        async with db_lock:
+            db["cfg"]["limit_usd"] = new_limit
+            logger.info(f"🧪 Тестовый лимит установлен в памяти: {new_limit}")
+        await save_db()
+        await bot.reply_to(m, f"✅ Лимит в памяти установлен: {new_limit}, БД сохранена")
+    except:
+        await bot.reply_to(m, "Ошибка")
 
 
 @bot.message_handler(commands=["watch"])
