@@ -291,6 +291,7 @@ async def save_db():
                 "ON CONFLICT (id) DO UPDATE SET data = $1",
                 json.dumps(db)
             )
+        logger.info("✅ БД сохранена")
     except Exception as e:
         logger.warning(f"⚠️ Ошибка сохранения в Postgres: {e}")
 
@@ -1476,8 +1477,8 @@ async def cmd_mywallets(m: types.Message) -> None:
     if not wallets:
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🔗 Подключить кошелёк", callback_data="connect_new"))
-        await bot.reply_to(
-            m,
+        await bot.send_message(
+            m.chat.id,
             "👛 У тебя нет подключённых кошельков.\n"
             "Нажми кнопку ниже чтобы подключить:",
             reply_markup=kb
@@ -1502,8 +1503,8 @@ async def cmd_mywallets(m: types.Message) -> None:
 
     kb.add(types.InlineKeyboardButton("🔗 Добавить кошелёк", callback_data="connect_new"))
 
-    await bot.reply_to(
-        m,
+    await bot.send_message(
+        m.chat.id,
         f"👛 <b>Твой подключённый кошелёк:</b>\n\n"
         f"{lines}\n\n"
         f"🔔 Алерты при любом движении.\n"
@@ -1811,6 +1812,7 @@ async def cmd_limit(m: types.Message) -> None:
                 db["cfg"]["limit_usd"] = v
                 logger.info(f"Лимит изменён на {v}")  # временно
             await save_db()
+            logger.info(f"✅ Лимит сохранён в БД, новое значение: {v}")
             await bot.reply_to(m, f"✅ Лимит китов изменён: <b>${v:,.0f}</b>")
         except ValueError:
             await bot.reply_to(m, f"❌ Укажите число от {LIMIT_MIN_USD:.0f}. Пример: /limit 100")
