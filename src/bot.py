@@ -268,11 +268,13 @@ async def init_db():
                 loaded_data = json.loads(row['data'])
                 db.update({**_DB_DEFAULT, **loaded_data})
                 logger.info("✅ Статистика успешно загружена из PostgreSQL")
+                logger.info(f"🔍 Загруженный лимит: {db['cfg']['limit_usd']}")
             else:
                 # Если база пустая, создаем первую запись
                 db.update(_DB_DEFAULT.copy())
                 await conn.execute("INSERT INTO bot_data (id, data) VALUES (1, $1)", json.dumps(db))
                 logger.info("🆕 Создана новая запись в PostgreSQL")
+                logger.info(f"🔍 Лимит по умолчанию: {db['cfg']['limit_usd']}")
             
             # Убедимся что audit_cache существует
             if "audit_cache" not in db:
@@ -1080,8 +1082,16 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
 
 
 async def mint_guardian_for_user(uid: int):
-    """Фоновая задача для минта Guardian NFT пользователю"""
+    """Фоновая задача для минта Guardian NFT пользователю (только если ещё нет)"""
     logger.info(f"🚀 mint_guardian_for_user: uid={uid}")
+    
+    # Проверяем, есть ли уже NFT у пользователя
+    async with db_lock:
+        existing_token = db.get("user_guardians", {}).get(str(uid))
+    if existing_token:
+        logger.info(f"ℹ️ У пользователя {uid} уже есть Guardian NFT (token_id={existing_token}), пропускаем минт")
+        return
+
     try:
         token_id = await mint_guardian(
             name=f"Guardian_{uid}",
@@ -1811,8 +1821,12 @@ async def cmd_limit(m: types.Message) -> None:
             async with db_lock:
                 db["cfg"]["limit_usd"] = v
                 logger.info(f"Лимит изменён на {v}")  # временно
+                logger.info(f"🔍 БД до сохранения: limit_usd={db['cfg']['limit_usd']}")
             await save_db()
             logger.info(f"✅ Лимит сохранён в БД, новое значение: {v}")
+            # Проверяем, что сохранилось
+            async with db_lock:
+                logger.info(f"🔍 БД после сохранения: limit_usd={db['cfg']['limit_usd']}")
             await bot.reply_to(m, f"✅ Лимит китов изменён: <b>${v:,.0f}</b>")
         except ValueError:
             await bot.reply_to(m, f"❌ Укажите число от {LIMIT_MIN_USD:.0f}. Пример: /limit 100")
