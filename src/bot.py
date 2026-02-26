@@ -159,6 +159,8 @@ _DB_DEFAULT: dict = {
     "user_limits": {}, # <-- Добавили хранилище персональных лимитов
     "user_guardians": {},   # <-- добавить сюда
     "guardian_stats_cache": {},  # <-- кеш статистики Guardian NFT
+    "bonus_flags": {},  # <-- сюда будем записывать, какие бонусы получил пользователь
+    "total_analyzed_usd": 0.0,          # <-- добавить эту строку
     "last_block": 0,
     "connected_wallets": {},
     "pending_verifications": {},
@@ -791,6 +793,7 @@ async def process_bnb_tx(tx: dict) -> None:
 
         async with db_lock:
             db["stats"]["whales"] += 1
+            db["total_analyzed_usd"] = db.get("total_analyzed_usd", 0.0) + val_usd   # <-- добавить
 
         whale_text = (
             f"🐳 <b>WHALE — BNB</b>\n"
@@ -890,6 +893,7 @@ async def process_erc20_log(log: dict) -> None:
 
         async with db_lock:
             db["stats"]["whales"] += 1
+            db["total_analyzed_usd"] = db.get("total_analyzed_usd", 0.0) + val_usd   # <-- добавить
 
         whale_text = (
             f"🐋 <b>WHALE — TOKEN</b>\n"
@@ -1243,20 +1247,22 @@ def get_main_menu_keyboard():
 
 @bot.message_handler(commands=["start"])
 async def cmd_start(m: types.Message) -> None:
-    logger.info(f"🔍 /start вызван от user_id={m.from_user.id}")
+    logger.info(f"🔍 /start вызван от user_id={m.from_user.id}, полный текст: {m.text}")
     clear_state(m.from_user.id)
     
-    # Убираем reply-клавиатуру, если она была
+    # Разбираем параметры после /start
+    args = m.text.split()
+    source = "direct"
+    if len(args) > 1:
+        source = args[1]
+    
+    # Убираем сообщение с командой /start
     try:
         await bot.delete_message(m.chat.id, m.message_id)
     except:
         pass
     
-    # Принудительно обновляем лимит из БД
-    async with db_lock:
-        current_limit = db["cfg"]["limit_usd"]
-        logger.info(f"� Текущий лимит из БД: {current_limit}")
-    
+    # Отправляем главное меню
     text = await get_status_text()
     await send_and_clean(
         m.chat.id,
@@ -1264,6 +1270,32 @@ async def cmd_start(m: types.Message) -> None:
         reply_markup=get_main_menu_keyboard(),
         user_id=m.from_user.id
     )
+    
+    # Если пользователь пришёл с дашборда – выдаём бонус
+    if source == "dashboard":
+        uid_str = str(m.from_user.id)
+        async with db_lock:
+            # Проверяем, не получал ли он уже бонус
+            if "dashboard_bonus" not in db["bonus_flags"].get(uid_str, []):
+                # Добавляем флаг
+                if uid_str not in db["bonus_flags"]:
+                    db["bonus_flags"][uid_str] = []
+                db["bonus_flags"][uid_str].append("dashboard_bonus")
+                await save_db()
+                
+                # Отправляем приветственное сообщение о бонусе
+                await safe_send(
+                    m.chat.id,
+                    "🌟 **Добро пожаловать с официального дашборда!**\n\n"
+                    "Вы получили эксклюзивный бонус: **бесплатный первый уровень апгрейда вашего Guardian NFT**, как только мы запустим систему уровней. "
+                    "Следите за обновлениями! А пока подключайте кошелёк и получайте своего личного защитника."
+                )
+            else:
+                # Если уже получал – просто напоминаем
+                await safe_send(
+                    m.chat.id,
+                    "🌟 Рады снова видеть вас! Напоминаем, что у вас уже есть право на бесплатный первый уровень апгрейда Guardian NFT, когда он станет доступен."
+                )
 
 
 @bot.message_handler(commands=["connect"])
@@ -2406,14 +2438,19 @@ async def _run_health_server() -> None:
         async def handle_stats(request):
             """Возвращает общую статистику бота для дашборда"""
             async with db_lock:
+                # Исключаем бота с ID 8580926708
+                real_wallets = [uid for uid in db["connected_wallets"].keys() if uid != "8580926708"]
+                real_guardians = [uid for uid in db.get("user_guardians", {}).keys() if uid != "8580926708"]
+                
                 stats = {
                     "blocks": db["stats"]["blocks"],
                     "whales": db["stats"]["whales"],
                     "threats": db["stats"]["threats"],
-                    "wallets": sum(len(v) for v in db["connected_wallets"].values()),
-                    "nft_minted": len(db.get("user_guardians", {})),
+                    "wallets": len(real_wallets),
+                    "nft_minted": len(real_guardians),
                     "limit_usd": db["cfg"]["limit_usd"],
-                    "bnb_price": _price_cache.get("BNB", 0)
+                    "bnb_price": _price_cache.get("BNB", 0),
+                    "total_analyzed_usd": db.get("total_analyzed_usd", 0.0)
                 }
             return web.json_response(stats, headers=cors_headers)
 
