@@ -158,6 +158,7 @@ _DB_DEFAULT: dict = {
     "cfg":   {"limit_usd": 10_000.0, "watch": [], "ignore": []},
     "user_limits": {}, # <-- Добавили хранилище персональных лимитов
     "user_guardians": {},   # <-- добавить сюда
+    "guardian_stats_cache": {},  # <-- кеш статистики Guardian NFT
     "last_block": 0,
     "connected_wallets": {},
     "pending_verifications": {},
@@ -655,11 +656,18 @@ async def check_scam(addr: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 async def safe_send(chat_id: int, text: str, **kwargs) -> None:
-    # Пропускаем ботов
+    # Пропускаем ботов и очищаем БД от них
     try:
         chat = await bot.get_chat(chat_id)
         if chat.type == 'private' and getattr(chat, 'is_bot', False):
-            logger.debug(f"Skipping bot chat {chat_id}")
+            logger.info(f"Обнаружен бот {chat_id}, удаляем из БД")
+            # Удаляем этого пользователя из всех списков
+            async with db_lock:
+                uid_str = str(chat_id)
+                db["connected_wallets"].pop(uid_str, None)
+                db["user_guardians"].pop(uid_str, None)
+                db["user_limits"].pop(uid_str, None)
+            await save_db()
             return
     except Exception as e:
         logger.warning(f"Failed to get chat {chat_id}: {e}")
@@ -1146,6 +1154,29 @@ async def send_and_clean(chat_id: int, text: str, reply_markup=None, user_id: in
     _last_bot_message[user_id] = msg.message_id
     return msg
 
+async def get_guardian_stats_cached(token_id: int) -> tuple[int, int]:
+    """Возвращает защищённую сумму и количество сканов, используя кеш (до 1 часа)"""
+    async with db_lock:
+        cache = db.get("guardian_stats_cache", {})
+        entry = cache.get(str(token_id))
+        if entry and time.time() - entry["ts"] < 3600:
+            return entry["protected"], entry["scans"]
+    
+    # Если в кеше нет или устарело – запрашиваем из контракта
+    protected = contract.functions.protectedAmount(token_id).call()
+    scans = contract.functions.scanCount(token_id).call()
+    
+    async with db_lock:
+        if "guardian_stats_cache" not in db:
+            db["guardian_stats_cache"] = {}
+        db["guardian_stats_cache"][str(token_id)] = {
+            "protected": protected,
+            "scans": scans,
+            "ts": time.time()
+        }
+    await save_db()  # можно сохранить, но не обязательно сразу
+    return protected, scans
+
 async def get_status_text() -> str:
     uptime = time.time() - start_time
     hours = int(uptime // 3600)
@@ -1584,10 +1615,9 @@ async def cmd_myguardian(m: types.Message, delete_previous: types.Message = None
             )
             return
 
-    # Читаем данные с контракта
+    # Читаем данные с контракта (с кешированием)
     try:
-        protected = contract.functions.protectedAmount(token_id).call()
-        scans = contract.functions.scanCount(token_id).call()
+        protected, scans = await get_guardian_stats_cached(token_id)
     except Exception as e:
         logger.warning(f"Не удалось прочитать данные Guardian {token_id}: {e}")
         protected = 0
@@ -1622,8 +1652,20 @@ async def cb_refresh_guardian(c: types.CallbackQuery):
         await bot.answer_callback_query(c.id, "❌ NFT не найден", show_alert=True)
         return
     try:
+        # Принудительно запрашиваем из контракта и обновляем кеш
         protected = contract.functions.protectedAmount(token_id).call()
         scans = contract.functions.scanCount(token_id).call()
+        
+        # Обновляем кеш
+        async with db_lock:
+            if "guardian_stats_cache" not in db:
+                db["guardian_stats_cache"] = {}
+            db["guardian_stats_cache"][str(token_id)] = {
+                "protected": protected,
+                "scans": scans,
+                "ts": time.time()
+            }
+        
         protected_usd = protected / 1_000_000
         text = f"""
 🛡️ <b>Твой Guardian NFT</b>

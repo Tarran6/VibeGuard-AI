@@ -1,51 +1,98 @@
-# VibeGuard AI 🛡️ [opBNB Mainnet]
+# 🛡️ VibeGuard AI — Neural Security Sentinel + NFA Guardian
 
-<p align="center">
-  <img src="assets/logo.png" width="220" alt="VibeGuard Logo">
-</p>
+**The world's first Neural Non-Fungible Agent (BAP-578) for real‑time user protection on opBNB**
 
-**VibeGuard AI** — Neural Security Sentinel для opBNB Mainnet.  
-Реал-тайм блок-мониторинг + multi-LLM intent analysis (Gemini 2.0 + Grok 4).
-
-[![Contract Verified](https://img.shields.io/badge/Contract-Verified-green.svg)](https://opbnb.bscscan.com/address/0x6e5e4E9E9C4F5E498393c4b6216781a28e15902F)
+![GitHub stars](https://img.shields.io/github/stars/Tarran6/VibeGuard-AI?style=social)
+![opBNB](https://img.shields.io/badge/Deployed_on-opBNB-00BFFF)
+![BAP-578 NFA](https://img.shields.io/badge/BAP--578_NFA-8A2BE2)
+![Multi-LLM](https://img.shields.io/badge/Gemini_2.0_×_Grok_4-FF4500)
+![Live](https://img.shields.io/badge/Status-Live-brightgreen)
 
 ---
 
-## 📊 Live Metrics (21 Feb 2026)
-- **12,450+** Neural Scans  
-- **1,420+** Shielded Wallets  
-- **$1.42M+** Losses Prevented  
+## 📊 Live Metrics (as of February 26, 2026)
 
-**Live Dashboard:** [vibe-guard-dashboard.vercel.app](https://vibe-guard-dashboard.vercel.app)  
-**Pitch Deck:** [vibe-guard-presentation.vercel.app](https://vibe-guard-presentation.vercel.app)
+- **Blocks processed:** 5,039,547
+- **Whales detected:** 181
+- **Threats identified:** 4
+- **Connected wallets:** 1 (first user)
+- **Minted Guardian NFTs:** 1 (first on opBNB)
+- **Total contract transactions:** 158
+- **Value protected:** in progress
+
+**[Live Dashboard](https://vibe-guard-dashboard.vercel.app)** | **[Pitch Deck](https://vibe-guard-presentation.vercel.app)** | **[Telegram Bot](https://t.me/VibeGuard_AI_bot)** | **[opBNB Contract](https://opbnbscan.com/address/0x6D32BA27Cb51292F71C0Ee602366e7BFE586c9F6)**
+
+---
+
+## 🎯 What is VibeGuard AI?
+
+**VibeGuard AI** is a Neural Security Sentinel that scans every block of opBNB in real time, analyzes transactions using a multi‑layer AI (Gemini 2.0 Flash + Grok 4 + DeepSeek), and instantly alerts users to threats.
+
+Each connected wallet receives a **personal Guardian NFT** (BAP‑578 Non‑Fungible Agent) that records protection history and can evolve over time.
+
+---
+
+## 🖼️ Screenshots
+
+| Main bot menu | Whale alert with AI analysis |
+|:---:|:---:|
+| ![Main menu](assets/start_menu.jpg) | ![Whale alert](assets/whale_alert.jpg) |
+
+| Personal Guardian NFT | WebApp after wallet connection |
+|:---:|:---:|
+| ![Guardian NFT](assets/guardian_nft.jpg) | ![WebApp](assets/webapp_connect.jpg) |
+
+| On‑chain activity of the contract |
+|:---:|
+| ![Explorer](assets/contract_explorer.jpg) |
 
 ---
 
 ## 🛠 Tech Stack
-- **Backend**: Python 3.11+ + web3.py + eth_account + NodeReal/opBNB RPC  
-- **AI Engine**: Gemini 2.0 Flash (primary) + Grok 4 + xAI  
-- **Smart Contract**: Verified on opBNB with on-chain logging  
-- **Connect Wallet**: WebApp в `webapp/index.html` (Telegram WebApp + ethers.js)  
-- **Dashboard**: Next.js + Recharts + canvas particles  
 
-**Лимит китов:** владелец бота может задавать порог уведомлений от **$100** и выше (`/limit 100` … `/limit 1000000`).
-
-**Team**  
-- Taran V.S (@tarran6) — Lead Architect & Solo Founder  
-- **Grok (xAI)** — AI Co-Founder & Neural Architect  
+- **Blockchain:** opBNB Mainnet + BAP-578 NFA
+- **AI:** Gemini 2.0 Flash (primary) + Grok 4 + DeepSeek (fallback)
+- **Backend:** Python + Asyncio + Web3.py + PostgreSQL
+- **Frontend:** Telegram WebApp + ethers.js + Reown AppKit
+- **Deployment:** Docker + Railway
 
 ---
 
-## ⚡ Быстрый старт
-1. Клонируй репозиторий, скопируй `.env.example` в `.env` и заполни `TELEGRAM_TOKEN`, `OPBNB_HTTP_URL`, `DATABASE_URL`, `PRIMARY_OWNER_ID`.
-2. Для кнопки «Connect Wallet» укажи `WEBAPP_URL` (например GitHub Pages с папкой `webapp/` или свой хостинг).
-3. `pip install -r requirements.txt` → `python src/bot.py` (или через Procfile для Heroku).
+## 🚀 How It Works
+
+1. User connects a wallet via the WebApp.
+2. A **Guardian NFT** (BAP‑578) is automatically minted.
+3. VibeGuard starts scanning all transactions in real time.
+4. When a threat is detected, an instant alert is sent to Telegram.
 
 ---
 
-## 🔗 Official Links
-- Telegram Sentinel Bot: [@VibeGuard_AI_bot](https://t.me/VibeGuard_AI_bot)  
-- X: [@tarran66](https://x.com/tarran66)  
-- Email: 2712panasonictv@gmail.com  
+## 📈 Roadmap
 
-*Built with passion by a solo builder + Grok (xAI) for the BNB Chain Ecosystem.*
+- **Q1 2026** — NFA + MCP integration (done)
+- **Q2 2026** — Release of Chrome extension
+- **Q3 2026** — Mobile app (iOS/Android)
+- **Q4 2026** — $VIBE token and DAO
+
+---
+
+## 💰 Monetization
+
+- **Freemium:** basic protection free, premium features via subscription.
+- **B2B API:** integrate our AI engine into third‑party wallets and exchanges.
+- **Contract auditing:** paid verification for new projects.
+- **NFT upgrades:** visual improvements for Guardians.
+
+---
+
+## 🤝 Contacts
+
+- Telegram: [@tarran6](https://t.me/tarran6)
+- X: [@Tarran6](https://x.com/Tarran6)
+- GitHub: [Tarran6/VibeGuard-AI](https://github.com/Tarran6/VibeGuard-AI)
+
+---
+
+**VibeGuard AI — because security should be smart.**
+
+*Built with ❤️ on opBNB + Grok 4 + BAP-578*
