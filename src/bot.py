@@ -1113,6 +1113,7 @@ async def get_status_text() -> str:
     async with db_lock:
         s = db["stats"]
         limit_usd = db["cfg"]["limit_usd"]
+        logger.info(f"🔍 get_status_text: загружен limit_usd={limit_usd}")
         last_b = db.get("last_block", 0)
         wc = len(db["cfg"]["watch"])
         ic = len(db["cfg"]["ignore"])
@@ -1171,6 +1172,7 @@ def get_main_menu_keyboard():
 
 @bot.message_handler(commands=["start"])
 async def cmd_start(m: types.Message) -> None:
+    logger.info(f"🔍 /start вызван от user_id={m.from_user.id}")
     clear_state(m.from_user.id)
     # Убираем reply-клавиатуру, если она была
     await bot.send_message(
@@ -1180,6 +1182,7 @@ async def cmd_start(m: types.Message) -> None:
     )
     # Отправляем основное меню с актуальным статусом
     text = await get_status_text()   # <-- используем функцию с актуальными данными
+    logger.info(f"🔍 /start отправляю текст с лимитом из get_status_text")
     await bot.send_message(
         m.chat.id,
         text,
