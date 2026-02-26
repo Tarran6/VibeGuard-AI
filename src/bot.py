@@ -1333,21 +1333,21 @@ async def cb_disconnect(c: types.CallbackQuery) -> None:
         )
         return
 
-    uid = int(parts[1])
+    uid = parts[1]  # оставляем строкой
     idx = int(parts[2])
 
-    if str(c.from_user.id) != str(uid):
+    if str(c.from_user.id) != uid:
         await bot.answer_callback_query(c.id, "⛔ Нет доступа", show_alert=True)
         return
 
     async with db_lock:
-        wallets = db["connected_wallets"].get(str(uid), [])
+        wallets = db["connected_wallets"].get(str(c.from_user.id), [])
         if idx >= len(wallets):
             await bot.answer_callback_query(c.id, "Кошелёк не найден")
             return
         removed = wallets.pop(idx)
         if not wallets:
-            del db["connected_wallets"][str(uid)]
+            del db["connected_wallets"][str(c.from_user.id)]
 
     await save_db()
     await bot.answer_callback_query(c.id, "✅ Кошелёк отключён")
@@ -1577,8 +1577,14 @@ Token ID: <code>{token_id}</code>
 """
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🔄 Обновить данные", callback_data="refresh_guardian"))
-        await bot.edit_message_text(text, c.message.chat.id, c.message.message_id, reply_markup=kb, disable_web_page_preview=True)
-        await bot.answer_callback_query(c.id, "✅ Данные обновлены")
+        try:
+            await bot.edit_message_text(text, c.message.chat.id, c.message.message_id, reply_markup=kb, disable_web_page_preview=True)
+            await bot.answer_callback_query(c.id, "✅ Данные обновлены")
+        except Exception as e:
+            if "message is not modified" in str(e):
+                await bot.answer_callback_query(c.id, "✅ Данные актуальны", show_alert=False)
+            else:
+                raise e
     except Exception as e:
         logger.error(f"refresh_guardian error: {e}")
         await bot.answer_callback_query(c.id, "❌ Ошибка обновления", show_alert=True)
