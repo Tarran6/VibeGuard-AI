@@ -26,6 +26,9 @@ from telebot import types
 from telebot.async_telebot import AsyncTeleBot
 from web3 import Web3
 
+# NFA импорт (относительный, так как bot.py в папке src)
+from nfa import mint_guardian, update_guardian_learning, attest_protection, contract
+
 # ---------------------------------------------------------------------------
 # КОНФИГУРАЦИЯ
 # ---------------------------------------------------------------------------
@@ -154,6 +157,7 @@ _DB_DEFAULT: dict = {
     "stats": {"blocks": 0, "whales": 0, "threats": 0},
     "cfg":   {"limit_usd": 10_000.0, "watch": [], "ignore": []},
     "user_limits": {}, # <-- Добавили хранилище персональных лимитов
+    "user_guardians": {},   # <-- добавить сюда
     "last_block": 0,
     "connected_wallets": {},
     "pending_verifications": {},
@@ -200,6 +204,15 @@ STATE_TTL = 600
 
 def esc(text: str) -> str:
     return html.escape(str(text))
+
+
+def score_emoji(score: int) -> str:
+    if score >= 80:
+        return "🟢"
+    elif score >= 50:
+        return "🟡"
+    else:
+        return "🔴"
 
 
 def get_state(uid: int) -> Optional[str]:
@@ -514,7 +527,7 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
 
 async def call_ai(prompt: str) -> str:
     configs = (
-        [("xai",    k) for k in XAI_KEYS]  +
+        # [("xai",    k) for k in XAI_KEYS]  +   # ← xAI отключён
         [("groq",   k) for k in GROQ_KEYS] +
         [("gemini", k) for k in GEMINI_KEYS] +
         [("deepseek", k) for k in DEEPSEEK_KEYS]
@@ -524,12 +537,16 @@ async def call_ai(prompt: str) -> str:
 
     async with ai_sem:
         for provider, key in configs:
+            logger.info(f"🤖 Пробуем AI провайдера: {provider}")
             try:
                 result = await _ai_request(provider, key, prompt)
                 if result:
+                    logger.info(f"✅ AI [{provider}] успешно ответил")
                     return esc(result)
+                else:
+                    logger.warning(f"⚠️ AI [{provider}] вернул пустой ответ")
             except Exception as e:
-                logger.warning(f"AI [{provider}] error: {e}")
+                logger.warning(f"❌ AI [{provider}] ошибка: {e}")
 
     return "Все AI-провайдеры временно недоступны."
 
@@ -746,8 +763,8 @@ async def process_bnb_tx(tx: dict) -> None:
             wallet_alert = (
                 f"🔔 <b>Активность кошелька</b>\n\n"
                 f"💸 <b>{val_bnb:.4f} BNB</b> (≈ ${val_usd:,.0f})\n"
-                f"From: <code>{esc(sender)}</code>\n"
-                f"To:   <code>{esc(target)}</code>"
+                f"From: <code>{esc(sender[:8] + '...' + sender[-4:])}</code>\n"
+                f"To:   <code>{esc(target[:8] + '...' + target[-4:])}</code>"
             )
             for uid in set(watchers):
                 await safe_send(uid, wallet_alert)
@@ -762,8 +779,8 @@ async def process_bnb_tx(tx: dict) -> None:
         whale_text = (
             f"🐳 <b>WHALE — BNB</b>\n"
             f"💰 <b>{val_bnb:.4f} BNB</b> (≈ ${val_usd:,.0f})\n"
-            f"From: <code>{esc(sender)}</code>\n"
-            f"To:   <code>{esc(target)}</code>"
+            f"From: <code>{esc(sender[:8] + '...' + sender[-4:])}</code>\n"
+            f"To:   <code>{esc(target[:8] + '...' + target[-4:])}</code>"
         )
 
         if sender in watch or target in watch:
@@ -777,17 +794,16 @@ async def process_bnb_tx(tx: dict) -> None:
         # ФОРМИРУЕМ УМНЫЙ ПРОМПТ ДЛЯ ИИ на основе данных блокчейна
         if risks:
             prompt = (
-                f"Транзакция {val_bnb:.2f} BNB (${val_usd:,.0f}) на контракт {target}. "
-                f"Наш сканер выявил критические угрозы: {', '.join(risks)}. "
-                f"Напиши жесткий и краткий security-отчет на русском (2-3 предложения), "
-                f"объясни инвесторам, почему этот токен опасен. Без HTML-тегов."
+                f"🚨 ТРЕВОГА! КИТ ПЕРЕВЕЛ {val_bnb:.2f} BNB (${val_usd:,.0f}) НА ПОДОЗРИТЕЛЬНЫЙ КОНТРАКТ {target[:8]}...\n"
+                f"Риски: {', '.join(risks)}.\n"
+                f"Напиши жёсткое предупреждение для инвесторов (2 предложения), с эмодзи. Без паники, но чётко."
             )
         else:
             prompt = (
-                f"Крупный перевод {val_bnb:.2f} BNB (${val_usd:,.0f}) от {sender} к {target}. "
-                f"Смарт-контракт выглядит чистым (базовые проверки пройдены). "
-                f"Что это может значить (арбитраж, накопление маркетмейкером, покупка)? "
-                f"Кратко на русском, 2 предложения. Без HTML-тегов."
+                f"🐋 КИТ ПЕРЕВЕЛ {val_bnb:.2f} BNB (${val_usd:,.0f})!\n"
+                f"От {sender[:8]}... к {target[:8]}...\n"
+                f"Контракт чист. Как думаешь, это арбитраж, покупка или просто перекладывание?\n"
+                f"Ответь коротко и с огоньком (1-2 предложения), используй эмодзи. На русском."
             )
 
         # ТЕПЕРЬ зовем ИИ с готовым отчетом
@@ -797,7 +813,7 @@ async def process_bnb_tx(tx: dict) -> None:
         # Собираем красивый итоговый алерт
         full_report = (
             f"{whale_text}\n\n"
-            f"🛡️ <b>VibeScore: {score}/100</b>\n"
+            f"🛡️ <b>VibeScore: {score}/100</b> {score_emoji(score)}\n"
             f"{'🚨 <b>КРИТИЧЕСКИЙ РИСК:</b> ' + ', '.join(risks) if risks else '✅ Базовые проверки пройдены'}\n\n"
             f"🧠 <b>Deep AI Audit:</b>\n{verdict}"
         )
@@ -845,9 +861,9 @@ async def process_erc20_log(log: dict) -> None:
             wallet_alert = (
                 f"🔔 <b>Активность кошелька (Token)</b>\n\n"
                 f"💸 <b>{amount:,.2f} токенов</b> (≈ ${val_usd:,.0f})\n"
-                f"Токен: <code>{esc(token_addr)}</code>\n"
-                f"From:  <code>{esc(sender)}</code>\n"
-                f"To:    <code>{esc(receiver)}</code>"
+                f"Токен: <code>{esc(token_addr[:8] + '...' + token_addr[-4:])}</code>\n"
+                f"From:  <code>{esc(sender[:8] + '...' + sender[-4:])}</code>\n"
+                f"To:    <code>{esc(receiver[:8] + '...' + receiver[-4:])}</code>"
             )
             for uid in set(watchers):
                 await safe_send(uid, wallet_alert)
@@ -862,9 +878,9 @@ async def process_erc20_log(log: dict) -> None:
         whale_text = (
             f"🐋 <b>WHALE — TOKEN</b>\n"
             f"💰 <b>{amount:,.2f} токенов</b> (≈ ${val_usd:,.0f})\n"
-            f"Токен: <code>{esc(token_addr)}</code>\n"
-            f"From:  <code>{esc(sender)}</code>\n"
-            f"To:    <code>{esc(receiver)}</code>"
+            f"Токен: <code>{esc(token_addr[:8] + '...' + token_addr[-4:])}</code>\n"
+            f"From:  <code>{esc(sender[:8] + '...' + sender[-4:])}</code>\n"
+            f"To:    <code>{esc(receiver[:8] + '...' + receiver[-4:])}</code>"
         )
 
         if sender in watch or receiver in watch:
@@ -878,17 +894,15 @@ async def process_erc20_log(log: dict) -> None:
         # Умный промпт для токенов
         if risks:
             prompt = (
-                f"Замечено движение {amount:,.0f} токенов (${val_usd:,.0f}) контракта {token_addr}. "
-                f"Анализатор кода выявил угрозы: {', '.join(risks)}. "
-                f"Напиши срочное предупреждение для трейдеров на русском (2-3 предложения), "
-                f"чем грозят эти уязвимости. Без HTML-тегов."
+                f"🚨 КРИТИЧЕСКИЙ РИСК! КИТ ПЕРЕВЕЛ {amount:,.0f} токенов (${val_usd:,.0f}) КОНТРАКТА {token_addr[:8]}...\n"
+                f"Угрозы: {', '.join(risks)}.\n"
+                f"Напиши срочное предупреждение трейдерам на русском (2 предложения), с эмодзи. Чётко и жёстко."
             )
         else:
             prompt = (
-                f"Кит перевел {amount:,.0f} токенов (${val_usd:,.0f}) контракта {token_addr}. "
-                f"Токен прошел базовую проверку безопасности. "
-                f"Проанализируй, похоже ли это на OTC-сделку, перенос на холодный кошелек или дамп? "
-                f"Ответь кратко на русском, 2 предложения. Без HTML-тегов."
+                f"🐋 КИТ ДВИГАЕТ {amount:,.0f} токенов (${val_usd:,.0f})!\n"
+                f"Контракт {token_addr[:8]}... чист.\n"
+                f"Это OTC-сделка, перекладка или подготовка к пампингу? Ответь коротко, с эмодзи."
             )
 
         async with ai_sem:
@@ -896,7 +910,7 @@ async def process_erc20_log(log: dict) -> None:
         
         full_report = (
             f"{whale_text}\n\n"
-            f"🛡️ <b>VibeScore: {score}/100</b>\n"
+            f"🛡️ <b>VibeScore: {score}/100</b> {score_emoji(score)}\n"
             f"{'🚨 <b>КРИТИЧЕСКИЙ РИСК:</b> ' + ', '.join(risks) if risks else '✅ Код токена чист'}\n\n"
             f"🧠 <b>Deep AI Audit:</b>\n{verdict}"
         )
@@ -1064,6 +1078,29 @@ async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[boo
     return True, "✅ Кошелёк успешно привязан"
 
 
+async def mint_guardian_for_user(uid: int):
+    """Фоновая задача для минта Guardian NFT пользователю"""
+    try:
+        token_id = await mint_guardian(
+            name=f"Guardian_{uid}",
+            image_uri="https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png"
+        )
+        await safe_send(
+            uid,
+            f"🛡️ <b>Вам выдан Guardian NFT!</b>\n"
+            f"Token ID: <code>{token_id}</code>\n\n"
+            f"Теперь ваш персональный Neural Guardian следит за безопасностью активов!"
+        )
+        async with db_lock:
+            if "user_guardians" not in db:
+                db["user_guardians"] = {}
+            db["user_guardians"][str(uid)] = token_id
+        await save_db()
+        logger.info(f"🛡️ Guardian NFT заминчен: token_id={token_id} для user_id={uid}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка минта Guardian для user_id={uid}: {e}", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ТЕКСТА
 # ---------------------------------------------------------------------------
@@ -1191,50 +1228,6 @@ async def cmd_connect(m: types.Message) -> None:
         "<i>Сессия действительна 10 минут.</i>",
         reply_markup=kb,
     )
-
-
-@bot.message_handler(content_types=["web_app_data"])
-async def handle_webapp_data(m: types.Message) -> None:
-    uid = m.from_user.id
-    logger.info(f"📩 Получены web_app_data от пользователя {uid}")
-    
-    try:
-        # Парсим JSON из WebApp
-        raw_data = m.web_app_data.data
-        data = json.loads(raw_data)
-        
-        address = data.get("address", "").strip()
-        sig = data.get("signature", "").strip()
-        # Этот nonce критически важен для связи сессии!
-        nonce_from_app = data.get("nonce", "").strip() 
-        
-        logger.info(f"📦 Данные: address={address[:10]}..., nonce={nonce_from_app[:8]}...")
-    except Exception as e:
-        logger.warning(f"webapp_data parse error uid={uid}: {e}")
-        await safe_send(uid, "❌ Ошибка данных от WebApp. Попробуй ещё раз.")
-        return
-
-    if not address or not sig:
-        logger.warning(f"Неполные данные от {uid}")
-        await safe_send(uid, "❌ Неполные данные от WebApp.")
-        return
-
-    # Запускаем верификацию (она проверит подпись и nonce)
-    success, message = await verify_wallet(uid, address, sig)
-
-    if success:
-        logger.info(f"✅ Кошелёк {address[:10]}... успешно подключён пользователем {uid}")
-        await safe_send(
-            uid,
-            f"✅ <b>Кошелёк подключён!</b>\n"
-            f"<code>{esc(address.lower())}</code>\n\n"
-            f"Теперь ты получаешь личные алерты о всех транзакциях этого адреса.",
-        )
-        # Принудительно сохраняем БД, чтобы кошелек не пропал после рестарта
-        await save_db()
-    else:
-        logger.warning(f"❌ Ошибка верификации для {uid}: {message}")
-        await safe_send(uid, f"❌ {esc(message)}")
 
 
 # ---------------------------------------------------------------------------
@@ -1404,31 +1397,62 @@ async def handle_webapp_data(m: types.Message) -> None:
         address = data.get("address", "").strip()
         sig = data.get("signature", "").strip()
         nonce = data.get("nonce", "").strip()
-        
-        logger.info(f"📥 WebApp данные: address={address[:8]}..., nonce={nonce[:8]}...")
+        logger.info(f"� Данные: address={address[:8]}..., nonce={nonce[:8]}...")
     except Exception as e:
         logger.warning(f"webapp_data parse error uid={uid}: {e}")
         await safe_send(uid, "❌ Ошибка данных от WebApp. Попробуй ещё раз.")
         return
 
     if not address or not sig or not nonce:
+        logger.warning(f"Неполные данные от {uid}")
         await safe_send(uid, "❌ Неполные данные от WebApp.")
         return
 
+    # Вызываем verify_wallet
+    logger.info(f"🔐 Вызываем verify_wallet для user_id={uid}")
     success, message = await verify_wallet(uid, address, sig)
+    logger.info(f"✅ verify_wallet вернул: success={success}, message={message}")
 
     if success:
+        logger.info(f"✅ Кошелёк успешно верифицирован для user_id={uid}")
         await safe_send(
             uid,
             f"✅ <b>Кошелёк подключён!</b>\n"
             f"<code>{esc(address.lower())}</code>\n\n"
-            f"Теперь ты получаешь личные алерты о всех транзакциях "
-            f"этого адреса.",
+            f"Теперь ты получаешь личные алерты о всех транзакциях этого адреса.",
         )
-        logger.info(f"✅ Кошелёк подключён: {address[:8]}... для user_id={uid}")
+        
+        # Начинаем минт
+        logger.info(f"🔄 Начинаем минт Guardian для user_id={uid}")
+        try:
+            token_id = await mint_guardian(
+                name=f"Guardian_{uid}",
+                image_uri="https://raw.githubusercontent.com/Tarran6/VibeGuard-AI/main/assets/logo.png"
+            )
+            logger.info(f"✅ mint_guardian вернул token_id={token_id}")
+            
+            await safe_send(
+                uid,
+                f"🛡️ <b>Вам выдан Guardian NFT!</b>\n"
+                f"Token ID: <code>{token_id}</code>\n\n"
+                f"Теперь ваш персональный Neural Guardian следит за безопасностью активов!"
+            )
+            
+            # Сохраняем token_id в БД
+            async with db_lock:
+                if "user_guardians" not in db:
+                    db["user_guardians"] = {}
+                db["user_guardians"][str(uid)] = token_id
+                logger.info(f"💾 token_id={token_id} сохранён в БД для user_id={uid}")
+            
+            await save_db()
+            logger.info(f"🎉 Guardian NFT успешно заминчен и сохранён для user_id={uid}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка минта Guardian для user_id={uid}: {e}", exc_info=True)
+            # Не прерываем основной поток, просто логируем
     else:
+        logger.warning(f"❌ Ошибка верификации: {message}")
         await safe_send(uid, f"❌ {esc(message)}")
-        logger.warning(f"❌ Ошибка подключения кошелька: {message}")
 
 
 # ---------------------------------------------------------------------------
@@ -1480,6 +1504,90 @@ async def cmd_mywallets(m: types.Message) -> None:
     )
 
 
+# =============================================================================
+# КОМАНДА /myguardian — персональный Guardian NFT
+# =============================================================================
+@bot.message_handler(commands=["myguardian", "guardian"])
+async def cmd_myguardian(m: types.Message) -> None:
+    uid = m.from_user.id
+
+    async with db_lock:
+        token_id = db.get("user_guardians", {}).get(str(uid))
+        if not token_id:
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("🔗 Получить Guardian", callback_data="connect_new"))
+            await bot.reply_to(
+                m,
+                "👛 У тебя пока нет Guardian NFT.\n\n"
+                "Подключи кошелёк и получи своего персонального Neural Guardian!",
+                reply_markup=kb
+            )
+            return
+
+    # Читаем данные с контракта
+    try:
+        protected = contract.functions.protectedAmount(token_id).call()
+        scans = contract.functions.scanCount(token_id).call()
+    except Exception as e:
+        logger.warning(f"Не удалось прочитать данные Guardian {token_id}: {e}")
+        protected = 0
+        scans = 0
+
+    protected_usd = protected / 1_000_000   # 6 decimals для USD (можно сделать динамически)
+
+    text = f"""
+🛡️ <b>Твой Guardian NFT</b>
+
+Token ID: <code>{token_id}</code>
+
+💰 Защищено: <b>${protected_usd:,.2f}</b>
+📊 Сканов сделано: <b>{scans:,}</b>
+
+🔗 <a href="https://opbnbscan.com/token/{os.getenv('NFA_CONTRACT_ADDRESS')}?a={token_id}">Посмотреть на opbnbscan</a>
+"""
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔄 Обновить данные", callback_data=f"refresh_guardian:{token_id}"))
+
+    await bot.reply_to(m, text, reply_markup=kb, disable_web_page_preview=True)
+
+
+# Callback для кнопки "Обновить данные"
+@bot.callback_query_handler(func=lambda c: c.data.startswith("refresh_guardian:"))
+async def cb_refresh_guardian(c: types.CallbackQuery):
+    try:
+        token_id = int(c.data.split(":")[1])
+        protected = contract.functions.protectedAmount(token_id).call()
+        scans = contract.functions.scanCount(token_id).call()
+        protected_usd = protected / 1_000_000
+
+        text = f"""
+🛡️ <b>Твой Guardian NFT</b>
+
+Token ID: <code>{token_id}</code>
+
+💰 Защищено: <b>${protected_usd:,.2f}</b>
+📊 Сканов сделано: <b>{scans:,}</b>
+
+🔗 <a href="https://opbnbscan.com/token/{os.getenv('NFA_CONTRACT_ADDRESS')}?a={token_id}">Посмотреть на opbnbscan</a>
+"""
+
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔄 Обновить данные", callback_data=f"refresh_guardian:{token_id}"))
+
+        await bot.edit_message_text(
+            text,
+            chat_id=c.message.chat.id,
+            message_id=c.message.message_id,
+            reply_markup=kb,
+            disable_web_page_preview=True
+        )
+        await bot.answer_callback_query(c.id, "✅ Данные обновлены")
+    except Exception as e:
+        logger.error(f"refresh_guardian error: {e}")
+        await bot.answer_callback_query(c.id, "❌ Ошибка обновления", show_alert=True)
+
+
 @bot.message_handler(commands=["disconnect"])
 async def cmd_disconnect(m: types.Message) -> None:
     uid = m.from_user.id
@@ -1499,6 +1607,26 @@ async def cmd_disconnect(m: types.Message) -> None:
         ))
     kb.add(types.InlineKeyboardButton("Отмена", callback_data="dc:cancel"))
     await bot.reply_to(m, "Выбери кошелёк для отключения:", reply_markup=kb)
+
+
+@bot.message_handler(commands=["stats"])
+async def cmd_stats(m: types.Message):
+    async with db_lock:
+        whales = db["stats"]["whales"]
+        blocks = db["stats"]["blocks"]
+        threats = db["stats"]["threats"]
+        limit = db["cfg"]["limit_usd"]
+    
+    text = (
+        f"📊 <b>VibeGuard Stats</b>\n\n"
+        f"🐳 Китов обнаружено: <b>{whales}</b>\n"
+        f"🛡️ Угроз выявлено: <b>{threats}</b>\n"
+        f"📦 Блоков обработано: <b>{blocks:,}</b>\n"
+        f"⚙️ Текущий лимит: <b>${limit}</b>\n"
+        f"🧠 AI: Groq / DeepSeek\n"
+        f"🔗 Сеть: opBNB"
+    )
+    await bot.reply_to(m, text)
 
 
 @bot.message_handler(commands=["check"])
@@ -1670,6 +1798,7 @@ async def cmd_limit(m: types.Message) -> None:
                 return
             async with db_lock:
                 db["cfg"]["limit_usd"] = v
+                logger.info(f"Лимит изменён на {v}")  # временно
             await save_db()
             await bot.reply_to(m, f"✅ Лимит китов изменён: <b>${v:,.0f}</b>")
         except ValueError:
@@ -1981,142 +2110,145 @@ def format_amount(amount: int, decimals: int) -> str:
     except:
         return str(amount)
 
-# ---------------------------------------------------------------------------
 # HEALTH SERVER (POST /webapp/connect)
 # ---------------------------------------------------------------------------
 
 async def _run_health_server() -> None:
-    from aiohttp import web
-    port = int(os.getenv("PORT", "8080"))
-    cors_headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Max-Age": "86400",
-    }
-
-    async def handle(_):
-        return web.Response(text="ok", headers=cors_headers)
-
-    async def handle_webapp_connect(request):
-        try:
-            payload = await request.json()
-        except Exception:
-            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
-
-        nonce = str(payload.get("nonce", "")).strip()
-        address = str(payload.get("address", "")).strip()
-        signature = str(payload.get("signature", "")).strip()
-
-        if not nonce or not address or not signature:
-            return web.json_response({"ok": False, "error": "missing fields"}, status=400, headers=cors_headers)
-
-        uid: Optional[int] = None
-        async with db_lock:
-            for uid_str, p in db.get("pending_verifications", {}).items():
-                if str(p.get("nonce", "")) == nonce:
-                    try:
-                        uid = int(uid_str)
-                    except Exception:
-                        uid = None
-                    break
-
-        if uid is None:
-            return web.json_response({"ok": False, "error": "session not found"}, status=404, headers=cors_headers)
-
-        success, message = await verify_wallet(uid, address, signature)
-        if success:
-            await safe_send(
-                uid,
-                f"✅ <b>Кошелёк подключён!</b>\n"
-                f"<code>{esc(address.lower())}</code>\n\n"
-                f"Теперь ты получаешь личные алерты о всех транзакциях "
-                f"этого адреса.",
-            )
-            return web.json_response({"ok": True}, headers=cors_headers)
-
-        return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
-
-    async def handle_approvals(request):
-        """API endpoint для сканирования approve"""
-        try:
-            payload = await request.json()
-        except Exception:
-            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
-
-        address = str(payload.get("address", "")).strip()
-        
-        if not address or not Web3.is_address(address):
-            return web.json_response({"ok": False, "error": "invalid address"}, status=400, headers=cors_headers)
-        
-        try:
-            approvals = await scan_approvals(address)
-            return web.json_response({"ok": True, "approvals": approvals}, headers=cors_headers)
-        except Exception as e:
-            logger.error(f"handle_approvals error: {e}")
-            return web.json_response({"ok": False, "error": "scan failed"}, status=500, headers=cors_headers)
-
-    async def handle_webapp_connect_options(_):
-        return web.Response(status=204, headers=cors_headers)
-
-    async def handle_webapp_approvals_options(_):
-        return web.Response(status=204, headers=cors_headers)
-
-    async def handle_webapp_approvals(request):
-        # Этот код поймет и GET (?address=) и POST ({"address": "0x"})
-        address = request.query.get("address")
-        if not address and request.method == "POST":
-            try:
-                data = await request.json()
-                address = data.get("address")
-            except: pass
-        
-        if not address or not Web3.is_address(address):
-            return web.json_response({"ok": False, "error": "Invalid address"}, headers=cors_headers)
-
-        try:
-            # Используем GoPlus (Сеть 204 = opBNB)
-            url = f"https://api.gopluslabs.io/api/v1/token_approvals?chain_id=204&user_address={address}"
-            async with http_session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                raw_approvals = data.get("result", [])
-                
-                clean_approvals = []
-                for token in raw_approvals:
-                    token_addr = token.get("token_address")
-                    token_name = token.get("token_name", "Unknown")
-                    for spender in token.get("approved_list", []):
-                        allowance = spender.get("allowance")
-                        if allowance and allowance != "0":
-                            clean_approvals.append({
-                                "tokenAddress": token_addr,
-                                "tokenName": token_name,
-                                "spenderAddress": spender.get("approved_contract"),
-                                "amount": allowance,
-                                "risk": "high" if spender.get("is_danger") == 1 else "low"
-                            })
-                return web.json_response({"ok": True, "approvals": clean_approvals}, headers=cors_headers)
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, headers=cors_headers)
-
-    app = web.Application()
-    app.router.add_get("/", handle)
-    app.router.add_post("/webapp/connect", handle_webapp_connect)
-    app.router.add_get("/webapp/approvals", handle_webapp_approvals)
-    app.router.add_post("/webapp/approvals", handle_webapp_approvals)
-    app.router.add_options("/{tail:.*}", handle_webapp_connect_options)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=port)
-    await site.start()
-    logger.info("✅ Health server listening on 0.0.0.0:%d", port)
-
+    logger.info("🚀 _run_health_server: попытка запуска...")
     try:
-        while not _shutdown:
-            await asyncio.sleep(1)
-    finally:
-        await runner.cleanup()
-        logger.info("✅ Health server stopped")
+        from aiohttp import web
+        port = int(os.getenv("PORT", "8080"))
+        logger.info(f"🔄 _run_health_server: порт {port}")
+        cors_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "86400",
+        }
+
+        async def handle(_):
+            return web.Response(text="ok", headers=cors_headers)
+
+        async def handle_webapp_connect(request):
+            logger.info(f"📥 POST /webapp/connect вызван от {request.remote}")
+            try:
+                payload = await request.json()
+            except Exception:
+                logger.warning("❌ Ошибка парсинга JSON в /webapp/connect")
+                return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=cors_headers)
+
+            nonce = str(payload.get("nonce", "")).strip()
+            address = str(payload.get("address", "")).strip()
+            signature = str(payload.get("signature", "").strip())
+            logger.info(f"📦 /webapp/connect данные: nonce={nonce[:8]}..., address={address[:8]}...")
+
+            if not nonce or not address or not signature:
+                logger.warning("❌ Отсутствуют обязательные поля в /webapp/connect")
+                return web.json_response({"ok": False, "error": "missing fields"}, status=400, headers=cors_headers)
+
+            uid: Optional[int] = None
+            async with db_lock:
+                for uid_str, p in db.get("pending_verifications", {}).items():
+                    if str(p.get("nonce", "")) == nonce:
+                        try:
+                            uid = int(uid_str)
+                        except Exception:
+                            uid = None
+                        break
+
+            if uid is None:
+                logger.warning(f"❌ Сессия не найдена для nonce={nonce[:8]}...")
+                return web.json_response({"ok": False, "error": "session not found"}, status=404, headers=cors_headers)
+
+            success, message = await verify_wallet(uid, address, signature)
+            if success:
+                await safe_send(
+                    uid,
+                    f"✅ <b>Кошелёк подключён!</b>\n"
+                    f"<code>{esc(address.lower())}</code>\n\n"
+                    f"Теперь ты получаешь личные алерты о всех транзакциях "
+                    f"этого адреса.",
+                )
+                # После успешной верификации запускаем минт Guardian в фоне
+                asyncio.create_task(mint_guardian_for_user(uid))
+                logger.info(f"✅ Кошелёк подключен и минт Guardian запущен для user_id={uid}")
+                return web.json_response({"ok": True}, headers=cors_headers)
+
+            return web.json_response({"ok": False, "error": str(message)[:200]}, status=400, headers=cors_headers)
+
+        async def handle_approvals(request):
+            logger.info(f"📥 {request.method} /webapp/approvals вызван от {request.remote}")
+            address = None
+            if request.method == "POST":
+                try:
+                    data = await request.json()
+                    address = data.get("address")
+                except: pass
+            elif request.method == "GET":
+                address = request.query.get("address")
+        
+            if not address or not Web3.is_address(address):
+                logger.warning(f"❌ Невалидный адрес: {address}")
+                return web.json_response({"ok": False, "error": "Invalid address"}, headers=cors_headers)
+
+            try:
+                # Используем GoPlus (Сеть 204 = opBNB)
+                url = f"https://api.gopluslabs.io/api/v1/token_approvals?chain_id=204&user_address={address}"
+                async with http_session.get(url, timeout=10) as resp:
+                    data = await resp.json()
+                    raw_approvals = data.get("result", [])
+                    
+                    clean_approvals = []
+                    for token in raw_approvals:
+                        token_addr = token.get("token_address")
+                        token_name = token.get("token_name", "Unknown")
+                        for spender in token.get("approved_list", []):
+                            allowance = spender.get("allowance")
+                            if allowance and allowance != "0":
+                                clean_approvals.append({
+                                    "tokenAddress": token_addr,
+                                    "tokenName": token_name,
+                                    "spenderAddress": spender.get("approved_contract"),
+                                    "amount": allowance,
+                                    "risk": "high" if spender.get("is_danger") == 1 else "low"
+                                })
+                    logger.info(f"✅ Найдено {len(clean_approvals)} approvals для {address[:8]}...")
+                    return web.json_response({"ok": True, "approvals": clean_approvals}, headers=cors_headers)
+            except Exception as e:
+                logger.error(f"❌ Ошибка в /webapp/approvals: {e}")
+                return web.json_response({"ok": False, "error": str(e)}, headers=cors_headers)
+
+        async def handle_webapp_approvals(request):
+            return await handle_approvals(request)
+
+        async def handle_webapp_connect_options(_):
+            return web.Response(headers=cors_headers)
+
+        logger.info("🔧 Создание приложения и регистрация роутов...")
+        app = web.Application()
+        app.router.add_get("/", handle)
+        app.router.add_post("/webapp/connect", handle_webapp_connect)
+        app.router.add_get("/webapp/approvals", handle_webapp_approvals)
+        app.router.add_post("/webapp/approvals", handle_webapp_approvals)
+        app.router.add_options("/{tail:.*}", handle_webapp_connect_options)
+        
+        logger.info("🚀 Запуск AppRunner и TCPSite...")
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host="0.0.0.0", port=port)
+        await site.start()
+        logger.info(f"✅ Health server listening on 0.0.0.0:{port}")
+
+        try:
+            while not _shutdown:
+                await asyncio.sleep(1)
+        finally:
+            await runner.cleanup()
+            logger.info("✅ Health server stopped")
+            
+    except Exception as e:
+        logger.error(f"❌ _run_health_server упал с ошибкой: {e}", exc_info=True)
+        raise  # можно не выбрасывать, чтобы задача завершилась, но ошибка залогирована
 
 
 # ---------------------------------------------------------------------------
