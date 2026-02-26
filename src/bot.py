@@ -1178,14 +1178,11 @@ async def cmd_start(m: types.Message) -> None:
         "🔄 Очищаем клавиатуру...",
         reply_markup=types.ReplyKeyboardRemove()
     )
-    # Отправляем основное меню
+    # Отправляем основное меню с актуальным статусом
+    text = await get_status_text()   # <-- используем функцию с актуальными данными
     await bot.send_message(
         m.chat.id,
-        (
-            "🛡️ <b>VibeGuard Sentinel v24.4</b>\n\n"
-            "Мониторинг китов и скам-контрактов на opBNB.\n\n"
-            "Используй кнопки ниже для навигации."
-        ),
+        text,
         reply_markup=get_main_menu_keyboard(),
     )
 
@@ -1339,7 +1336,7 @@ async def cb_disconnect(c: types.CallbackQuery) -> None:
     uid = int(parts[1])
     idx = int(parts[2])
 
-    if c.from_user.id != uid:
+    if str(c.from_user.id) != str(uid):
         await bot.answer_callback_query(c.id, "⛔ Нет доступа", show_alert=True)
         return
 
