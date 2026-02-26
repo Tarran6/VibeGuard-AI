@@ -2403,6 +2403,35 @@ async def _run_health_server() -> None:
         async def handle_webapp_connect_options(_):
             return web.Response(headers=cors_headers)
 
+        async def handle_stats(request):
+            """Возвращает общую статистику бота для дашборда"""
+            async with db_lock:
+                stats = {
+                    "blocks": db["stats"]["blocks"],
+                    "whales": db["stats"]["whales"],
+                    "threats": db["stats"]["threats"],
+                    "wallets": sum(len(v) for v in db["connected_wallets"].values()),
+                    "nft_minted": len(db.get("user_guardians", {})),
+                    "limit_usd": db["cfg"]["limit_usd"],
+                    "bnb_price": _price_cache.get("BNB", 0)
+                }
+            return web.json_response(stats, headers=cors_headers)
+
+        async def handle_global(request):
+            """Глобальные метрики: общая защищённая сумма (в долларах)"""
+            total_protected = 0
+            # Суммируем protectedAmount всех существующих Guardian NFT
+            # Для производительности можно закешировать, но пока делаем простой вариант
+            for token_id in db.get("user_guardians", {}).values():
+                try:
+                    protected = contract.functions.protectedAmount(token_id).call()
+                    total_protected += protected
+                except Exception as e:
+                    logger.warning(f"Не удалось получить protectedAmount для token {token_id}: {e}")
+            # protectedAmount хранится с 6 десятичными знаками (как в вашем коде)
+            total_protected_usd = total_protected / 1_000_000
+            return web.json_response({"total_protected_usd": total_protected_usd}, headers=cors_headers)
+
         logger.info("🔧 Создание приложения и регистрация роутов...")
         app = web.Application()
         app.router.add_get("/", handle)
@@ -2410,6 +2439,8 @@ async def _run_health_server() -> None:
         app.router.add_get("/webapp/approvals", handle_webapp_approvals)
         app.router.add_post("/webapp/approvals", handle_webapp_approvals)
         app.router.add_options("/{tail:.*}", handle_webapp_connect_options)
+        app.router.add_get("/api/stats", handle_stats)
+        app.router.add_get("/api/global", handle_global)
         
         logger.info("🚀 Запуск AppRunner и TCPSite...")
         runner = web.AppRunner(app)
