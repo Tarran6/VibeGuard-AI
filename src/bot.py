@@ -1117,6 +1117,15 @@ async def mint_guardian_for_user(uid: int):
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ТЕКСТА
 # ---------------------------------------------------------------------------
 
+async def clean_and_send(chat_id: int, text: str, reply_markup=None, delete_previous: types.Message = None):
+    """Удаляет предыдущее сообщение (если есть) и отправляет новое"""
+    if delete_previous:
+        try:
+            await bot.delete_message(chat_id, delete_previous.message_id)
+        except:
+            pass
+    await bot.send_message(chat_id, text, reply_markup=reply_markup)
+
 async def get_status_text() -> str:
     uptime = time.time() - start_time
     hours = int(uptime // 3600)
@@ -1185,15 +1194,19 @@ def get_main_menu_keyboard():
 async def cmd_start(m: types.Message) -> None:
     logger.info(f"🔍 /start вызван от user_id={m.from_user.id}")
     clear_state(m.from_user.id)
+    
     # Убираем reply-клавиатуру, если она была
-    await bot.send_message(
-        m.chat.id,
-        "🔄 Очищаем клавиатуру...",
-        reply_markup=types.ReplyKeyboardRemove()
-    )
-    # Отправляем основное меню с актуальным статусом
-    text = await get_status_text()   # <-- используем функцию с актуальными данными
-    logger.info(f"🔍 /start отправляю текст с лимитом из get_status_text")
+    try:
+        await bot.delete_message(m.chat.id, m.message_id)
+    except:
+        pass
+    
+    # Принудительно обновляем лимит из БД
+    async with db_lock:
+        current_limit = db["cfg"]["limit_usd"]
+        logger.info(f"� Текущий лимит из БД: {current_limit}")
+    
+    text = await get_status_text()
     await bot.send_message(
         m.chat.id,
         text,
@@ -1299,12 +1312,7 @@ async def handle_menu_callback(c: types.CallbackQuery):
     elif action == "status":
         await bot.answer_callback_query(c.id)
         text = await get_status_text()
-        await bot.edit_message_text(
-            text,
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            reply_markup=get_main_menu_keyboard()
-        )
+        await clean_and_send(message.chat.id, text, get_main_menu_keyboard(), delete_previous=message)
     elif action == "ai":
         await bot.answer_callback_query(c.id)
         set_state(user_id, "ask_ai")
@@ -1328,17 +1336,12 @@ async def handle_menu_callback(c: types.CallbackQuery):
             f"👇 <b>Напиши новую сумму числом</b> (мин. $3,000).\n"
             f"<i>Админам разрешено любое число.</i>"
         )
-        await bot.edit_message_text(text, chat_id=message.chat.id, message_id=message.message_id, reply_markup=get_main_menu_keyboard())
+        await clean_and_send(message.chat.id, text, get_main_menu_keyboard(), delete_previous=message)
     elif action == "support":
         await bot.answer_callback_query(c.id)
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("Связаться с менеджером", url="https://t.me/tarran6"))
-        await bot.edit_message_text(
-            "🛡️ Нужна помощь? Напишите менеджеру:",
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            reply_markup=kb
-        )
+        await clean_and_send(message.chat.id, "🛡️ Нужна помощь? Напишите менеджеру:", kb, delete_previous=message)
     else:
         await bot.answer_callback_query(c.id, "Неизвестная команда")
 
