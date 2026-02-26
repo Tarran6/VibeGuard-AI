@@ -1249,8 +1249,14 @@ async def handle_menu_callback(c: types.CallbackQuery):
 
     if action == "mywallets":
         await bot.answer_callback_query(c.id)
-        # Показываем список кошельков новым сообщением
-        await cmd_mywallets(message)
+        # Создаем объект message для вызова cmd_mywallets
+        class FakeMessage:
+            def __init__(self, chat_id, from_user):
+                self.chat = type('Chat', (), {'id': chat_id})()
+                self.from_user = type('User', (), {'id': from_user})()
+        
+        fake_msg = FakeMessage(message.chat.id, user_id)
+        await cmd_mywallets(fake_msg)
     elif action == "connect":
         # Генерируем nonce и редактируем текущее сообщение
         await bot.answer_callback_query(c.id)
@@ -1488,7 +1494,7 @@ async def cmd_mywallets(m: types.Message) -> None:
         short = f"{w['address'][:6]}...{w['address'][-4:]}"
         kb.add(types.InlineKeyboardButton(
             f"❌ {w['label']} ({short})",
-            callback_data=f"dc:{uid}:{i}",
+            callback_data=f"dc:{str(uid)}:{i}",
         ))
 
     kb.add(types.InlineKeyboardButton("🔗 Добавить кошелёк", callback_data="connect_new"))
