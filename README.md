@@ -1,98 +1,117 @@
-# 🛡️ VibeGuard AI — Neural Security Sentinel + NFA Guardian
+# 🛡️ VibeGuard AI — Neural Security Layer for opBNB
 
-**The world's first Neural Non-Fungible Agent (BAP-578) for real‑time user protection on opBNB**
+**AI-powered on-chain/off-chain security infrastructure protecting users from scams, honeypots, and malicious contracts in real time.**
 
-![GitHub stars](https://img.shields.io/github/stars/Tarran6/VibeGuard-AI?style=social)
-![opBNB](https://img.shields.io/badge/Deployed_on-opBNB-00BFFF)
-![BAP-578 NFA](https://img.shields.io/badge/BAP--578_NFA-8A2BE2)
-![Multi-LLM](https://img.shields.io/badge/Gemini_2.0_×_Grok_4-FF4500)
-![Live](https://img.shields.io/badge/Status-Live-brightgreen)
+[![Deployed on opBNB](https://img.shields.io/badge/Deployed_on-opBNB-00BFFF)](https://opbnbscan.com/address/0x6D32BA27Cb51292F71C0Ee602366e7BFE586c9F6)
+[![BAP-578 NFA](https://img.shields.io/badge/BAP--578_NFA-8A2BE2)](https://github.com/bnb-chain/BAP-578)
+[![Multi-LLM](https://img.shields.io/badge/AI-Gemini_2.0_×_Grok_4_×_DeepSeek-FF4500)](https://deepmind.google/technologies/gemini/)
+[![Live](https://img.shields.io/badge/Status-Live-brightgreen)](https://t.me/VibeGuard_AI_bot)
 
 ---
 
-## 📊 Live Metrics (as of February 26, 2026)
+## 📊 Live Metrics (as of February 27, 2026)
 
-- **Blocks processed:** 5,039,547
-- **Whales detected:** 181
+- **Blocks processed:** 5,095,332
+- **Whales detected:** 187
 - **Threats identified:** 4
-- **Connected wallets:** 1 (first user)
-- **Minted Guardian NFTs:** 1 (first on opBNB)
-- **Total contract transactions:** 158
-- **Value protected:** in progress
+- **Value analyzed:** $1.1M+
+- **Active Guardian NFTs:** 1
+- **Shielded wallets:** 1
 
-**[Live Dashboard](https://vibe-guard-dashboard.vercel.app)** | **[Pitch Deck](https://vibe-guard-presentation.vercel.app)** | **[Telegram Bot](https://t.me/VibeGuard_AI_bot)** | **[opBNB Contract](https://opbnbscan.com/address/0x6D32BA27Cb51292F71C0Ee602366e7BFE586c9F6)**
+**[Telegram Bot](https://t.me/VibeGuard_AI_bot)** | **[Live Dashboard](https://vibe-guard-dashboard.vercel.app)** | **[Pitch Deck](https://vibe-guard-presentation.vercel.app)** | **[Contract](https://opbnbscan.com/address/0x6D32BA27Cb51292F71C0Ee602366e7BFE586c9F6)**
 
 ---
 
 ## 🎯 What is VibeGuard AI?
 
-**VibeGuard AI** is a Neural Security Sentinel that scans every block of opBNB in real time, analyzes transactions using a multi‑layer AI (Gemini 2.0 Flash + Grok 4 + DeepSeek), and instantly alerts users to threats.
+VibeGuard AI is a **neural security layer** for the opBNB blockchain. It continuously monitors every block, analyzes transactions using a ensemble of large language models (Gemini 2.0 Flash, Grok 4, DeepSeek), and provides **real‑time risk assessments** to users.
 
-Each connected wallet receives a **personal Guardian NFT** (BAP‑578 Non‑Fungible Agent) that records protection history and can evolve over time.
+Unlike traditional security tools that only detect threats after they happen, VibeGuard operates **proactively**:
+- It intercepts suspicious transaction patterns before user confirmation.
+- It audits smart contract code on‑demand.
+- It issues **on‑chain attestations** via Guardian NFTs (BAP‑578) to record protection history.
 
 ---
 
-## 🖼️ Screenshots
+## 🧠 Architecture Overview
+┌─────────────┐ ┌─────────────────┐ ┌──────────────────┐
+│ User │────▶│ Telegram Bot │────▶│ Security Layer │
+│ (Telegram) │ │ (Interface) │ │ (AI + GoPlus) │
+└─────────────┘ └─────────────────┘ └────────┬─────────┘
+│
+▼
+┌─────────────┐ ┌─────────────────┐ ┌──────────────────┐
+│ opBNB │◀────│ Guardian NFT │◀────│ On‑chain Attest. │
+│ Blockchain │ │ (BAP‑578 Agent) │ │ (LogScan events) │
+└─────────────┘ └─────────────────┘ └──────────────────┘
 
-| Main bot menu | Whale alert with AI analysis |
-|:---:|:---:|
-| ![Main menu](assets/start_menu.jpg) | ![Whale alert](assets/whale_alert.jpg) |
-
-| Personal Guardian NFT | WebApp after wallet connection |
-|:---:|:---:|
-| ![Guardian NFT](assets/guardian_nft.jpg) | ![WebApp](assets/webapp_connect.jpg) |
-
-| On‑chain activity of the contract |
-|:---:|
-| ![Explorer](assets/contract_explorer.jpg) |
+**Key components:**
+- **Security Layer:** Python + asyncio, real‑time block scanner, multi‑LLM intent analysis, GoPlus pre‑filter.
+- **Guardian NFT (BAP‑578):** Non‑fungible agent minted by the protocol for each user. Stores `protectedAmount`, `scanCount`, and a Merkle root of its "memory" – all on‑chain.
+- **On‑chain Attestations:** Every threat detection is logged immutably on opBNB via `logScan` events, creating verifiable proof of protection.
+- **User Interfaces:** Telegram bot (primary), WebApp for wallet connection, and a live dashboard with real‑time metrics.
 
 ---
 
 ## 🛠 Tech Stack
 
-- **Blockchain:** opBNB Mainnet + BAP-578 NFA
-- **AI:** Gemini 2.0 Flash (primary) + Grok 4 + DeepSeek (fallback)
-- **Backend:** Python + Asyncio + Web3.py + PostgreSQL
-- **Frontend:** Telegram WebApp + ethers.js + Reown AppKit
-- **Deployment:** Docker + Railway
+| Component          | Technology |
+|--------------------|------------|
+| Blockchain         | opBNB Mainnet, Solidity, BAP‑578 |
+| AI Models          | Gemini 2.0 Flash, Grok 4, DeepSeek |
+| Backend            | Python 3.12, asyncio, web3.py, PostgreSQL |
+| Frontend (Bot)     | Telegram Bot API, Reown AppKit |
+| Frontend (Dashboard)| Next.js, Tailwind, Recharts |
+| Infrastructure     | Docker, Railway, Vercel |
 
 ---
 
-## 🚀 How It Works
+## 🚀 How It Works (End‑to‑End Flow)
 
-1. User connects a wallet via the WebApp.
-2. A **Guardian NFT** (BAP‑578) is automatically minted.
-3. VibeGuard starts scanning all transactions in real time.
-4. When a threat is detected, an instant alert is sent to Telegram.
+1. **User connects wallet** via the Telegram WebApp (Reown AppKit).
+2. **Guardian NFT is minted** by the protocol (gas paid by the owner – frictionless onboarding).
+3. **Real‑time monitoring starts**: every new block is scanned; transactions are filtered through GoPlus and then analyzed by the AI ensemble.
+4. **If a threat is detected** (e.g., honeypot, drainer contract), an instant alert is sent to the user with a structured risk report (`verdict`, `confidence`, `risk_factors`).
+5. **Every scan is attested on‑chain** via `logScan` event, creating an immutable audit trail.
+6. **Users can query their Guardian** via `/guardian` to see protected amount and scan count.
+
+---
+
+## � Why Blockchain? (The BAP‑578 Narrative)
+
+Guardian NFTs are **protocol‑owned security agents**, not user‑collectibles. They are minted by the VibeGuard protocol to users **for free**, eliminating gas friction and preventing speculation. The on‑chain state (`protectedAmount`, `scanCount`) serves as **verifiable proof** of the agent's activity, while the actual user binding is kept off‑chain for scalability. This design allows:
+
+- Gasless onboarding for mass adoption.
+- Immutable protection history.
+- Future composability with other DeFi protocols (e.g., proof of protection for lending).
+
+---
+
+## Smart Contracts
+
+- **Guardian NFT (BAP-578):** [`0x6D32BA27Cb51292F71C0Ee602366e7BFE586c9F6`](https://opbnbscan.com/address/0x6D32BA27Cb51292F71C0Ee602366e7BFE586c9F6)  
+  ERC-721 токен, представляющий персонального защитника пользователя. Хранит `protectedAmount`, `scanCount` и историю обучения.
+
+- **VibeGuard Logging Contract:** [`0x6e5e4e9e9c4f5e498393c4b6216781a28e15902f`](https://opbnbscan.com/address/0x6e5e4e9e9c4f5e498393c4b6216781a28e15902f)  
+  Используется для on-chain записи всех событий сканирования (`logScan`) и защиты кошельков (`shieldWallet`). Обеспечивает прозрачность и неизменяемость логов.
 
 ---
 
 ## 📈 Roadmap
 
-- **Q1 2026** — NFA + MCP integration (done)
-- **Q2 2026** — Release of Chrome extension
-- **Q3 2026** — Mobile app (iOS/Android)
-- **Q4 2026** — $VIBE token and DAO
-
----
-
-## 💰 Monetization
-
-- **Freemium:** basic protection free, premium features via subscription.
-- **B2B API:** integrate our AI engine into third‑party wallets and exchanges.
-- **Contract auditing:** paid verification for new projects.
-- **NFT upgrades:** visual improvements for Guardians.
+- **Q1 2026** — MVP on opBNB, Guardian NFT minting, structured AI output.
+- **Q2 2026** — Chrome extension with real‑time transaction interception.
+- **Q3 2026** — Mobile app (iOS/Android) and B2B API for wallets.
+- **Q4 2026** — $VIBE token for governance and staking, multisig owner.
 
 ---
 
 ## 🤝 Contacts
 
-- Telegram: [@tarran6](https://t.me/tarran6)
-- X: [@Tarran6](https://x.com/Tarran6)
-- GitHub: [Tarran6/VibeGuard-AI](https://github.com/Tarran6/VibeGuard-AI)
+- **Telegram:** [@tarran6](https://t.me/tarran6)
+- **X:** [@Tarran6](https://x.com/Tarran6)
+- **GitHub:** [Tarran6/VibeGuard-AI](https://github.com/Tarran6/VibeGuard-AI)
 
 ---
 
-**VibeGuard AI — because security should be smart.**
-
-*Built with ❤️ on opBNB + Grok 4 + BAP-578*
+**Built with ❤️ on opBNB + Grok 4 + BAP‑578**
