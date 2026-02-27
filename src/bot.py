@@ -16,6 +16,7 @@ import secrets
 import signal
 import time
 from asyncio import Lock, Queue, Semaphore
+from collections import defaultdict
 from typing import Optional
 
 import aiohttp
@@ -204,6 +205,12 @@ STATE_TTL = 600
 # Последнее сообщение бота для каждого пользователя (чтобы удалять при новом действии)
 _last_bot_message: dict[int, int] = {}
 
+# Rate limiting для пользователей
+_user_rate_limits = defaultdict(list)  # user_id -> list of timestamps
+RATE_LIMIT_AUDIT = 3   # максимум 3 вызова /audit в час
+RATE_LIMIT_CHECK = 5   # максимум 5 вызовов /check в час
+RATE_WINDOW = 3600     # окно в секундах (1 час)
+
 # ---------------------------------------------------------------------------
 # УТИЛИТЫ
 # ---------------------------------------------------------------------------
@@ -241,6 +248,26 @@ def clear_state(uid: int) -> None:
 
 def is_owner(uid: int) -> bool:
     return uid in OWNERS
+
+
+def check_rate_limit(user_id: int, action: str) -> tuple[bool, int]:
+    """
+    Проверяет, не превысил ли пользователь лимит на action.
+    Возвращает (разрешено, сколько осталось попыток или секунд до сброса)
+    """
+    now = time.time()
+    key = f"{user_id}:{action}"
+    timestamps = _user_rate_limits[key]
+    # Оставляем только те, что попадают в окно
+    _user_rate_limits[key] = [t for t in timestamps if now - t < RATE_WINDOW]
+    limit = RATE_LIMIT_AUDIT if action == "audit" else RATE_LIMIT_CHECK
+    if len(_user_rate_limits[key]) >= limit:
+        oldest = min(_user_rate_limits[key])
+        wait = int(RATE_WINDOW - (now - oldest))
+        return False, wait
+    _user_rate_limits[key].append(now)
+    remaining = limit - len(_user_rate_limits[key])
+    return True, remaining
 
 
 # ---------------------------------------------------------------------------
@@ -1833,6 +1860,17 @@ async def cmd_check(m: types.Message) -> None:
     if len(args) < 2:
         await send_and_clean(m.chat.id, "Пример: /check 0xКОНТРАКТ", user_id=m.from_user.id)
         return
+
+    # Rate limit check
+    allowed, info = check_rate_limit(m.from_user.id, "check")
+    if not allowed:
+        await send_and_clean(
+            m.chat.id,
+            f"⏳ Лимит /check исчерпан. Подождите {info} сек.",
+            user_id=m.from_user.id
+        )
+        return
+
     addr = args[1].strip()
     if not Web3.is_address(addr):
         await send_and_clean(m.chat.id, "❌ Невалидный адрес.", user_id=m.from_user.id)
@@ -2014,6 +2052,16 @@ async def cmd_audit(m: types.Message):
     args = m.text.split()
     if len(args) < 2:
         return await send_and_clean(m.chat.id, "Пример: `/audit 0x...`", user_id=m.from_user.id)
+
+    # Rate limit check
+    allowed, info = check_rate_limit(m.from_user.id, "audit")
+    if not allowed:
+        await send_and_clean(
+            m.chat.id,
+            f"⏳ Вы превысили лимит на использование /audit. Попробуйте через {info} секунд.",
+            user_id=m.from_user.id
+        )
+        return
     
     addr = args[1].strip()
     await perform_audit(addr, m.chat.id, m.message_id)
