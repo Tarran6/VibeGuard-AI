@@ -536,7 +536,11 @@ async def log_onchain(target: str, score: int, is_safe: bool) -> None:
 # AI
 # ---------------------------------------------------------------------------
 
-async def call_ai(prompt: str) -> str:
+async def call_ai(prompt: str) -> dict:
+    """
+    Отправляет промпт AI и возвращает структурированный ответ в виде словаря.
+    Если не удалось получить или распарсить JSON, возвращает словарь с ошибкой.
+    """
     configs = (
         # [("xai",    k) for k in XAI_KEYS]  +   # ← xAI отключён
         [("groq",   k) for k in GROQ_KEYS] +
@@ -544,22 +548,45 @@ async def call_ai(prompt: str) -> str:
         [("deepseek", k) for k in DEEPSEEK_KEYS]
     )
     if not configs:
-        return "AI-ключи не настроены."
+        return {"verdict": "ERROR", "confidence": 0.0, "risk_factors": [], "explanation": "AI-ключи не настроены."}
 
     async with ai_sem:
         for provider, key in configs:
             logger.info(f"🤖 Пробуем AI провайдера: {provider}")
             try:
-                result = await _ai_request(provider, key, prompt)
-                if result:
-                    logger.info(f"✅ AI [{provider}] успешно ответил")
-                    return esc(result)
+                result_str = await _ai_request(provider, key, prompt)
+                if result_str:
+                    # Пытаемся распарсить JSON
+                    try:
+                        # Иногда AI может обернуть JSON в ```json ... ```, нужно очистить
+                        cleaned = result_str.strip()
+                        if cleaned.startswith("```json"):
+                            cleaned = cleaned[7:]
+                        if cleaned.endswith("```"):
+                            cleaned = cleaned[:-3]
+                        result_json = json.loads(cleaned)
+                        # Проверяем наличие обязательных полей
+                        required = ["verdict", "confidence", "risk_factors", "explanation"]
+                        if all(k in result_json for k in required):
+                            logger.info(f"✅ AI [{provider}] успешно ответил структурированным ответом")
+                            return result_json
+                        else:
+                            logger.warning(f"⚠️ AI [{provider}] вернул неполный JSON: {result_json}")
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"⚠️ AI [{provider}] вернул невалидный JSON: {result_str[:200]}, ошибка: {e}")
+                    # Если не удалось распарсить, возвращаем дефолт с текстом как explanation
+                    return {
+                        "verdict": "WARNING",
+                        "confidence": 0.5,
+                        "risk_factors": [],
+                        "explanation": esc(result_str)
+                    }
                 else:
                     logger.warning(f"⚠️ AI [{provider}] вернул пустой ответ")
             except Exception as e:
                 logger.warning(f"❌ AI [{provider}] ошибка: {e}")
 
-    return "Все AI-провайдеры временно недоступны."
+    return {"verdict": "ERROR", "confidence": 0.0, "risk_factors": [], "explanation": "Все AI-провайдеры временно недоступны."}
 
 
 async def _ai_request(provider: str, key: str, prompt: str) -> Optional[str]:
@@ -1068,7 +1095,36 @@ def get_cached_audit(addr: str) -> Optional[str]:
     if entry:
         age = time.time() - entry["timestamp"]
         if age < 3600:  # 1 час
-            return entry["result"]
+            result = entry["result"]
+            # Если результат - словарь (новый формат), формируем текст из него
+            if isinstance(result, dict):
+                verdict_text = result.get("verdict", "WARNING")
+                confidence = result.get("confidence", 0.5)
+                risk_factors = result.get("risk_factors", [])
+                explanation = result.get("explanation", "Нет пояснения.")
+
+                # Конвертируем вердикт в эмодзи и текст
+                if verdict_text == "SAFE":
+                    verdict_emoji = "✅"
+                    verdict_label = "Безопасно"
+                elif verdict_text == "DANGER":
+                    verdict_emoji = "🚨"
+                    verdict_label = "Опасно"
+                else:
+                    verdict_emoji = "⚠️"
+                    verdict_label = "Внимание"
+
+                # Формируем текст для пользователя
+                report = (
+                    f"{verdict_emoji} <b>Вердикт:</b> {verdict_label} (уверенность: {confidence:.0%})\n"
+                )
+                if risk_factors:
+                    report += f"⚠️ <b>Факторы риска:</b> {', '.join(risk_factors)}\n"
+                report += f"\n🧠 <b>Пояснение:</b>\n{esc(explanation)}"
+                return report
+            else:
+                # Если результат - строка (старый формат), возвращаем как есть
+                return result
     return None
 
 async def verify_wallet(user_id: int, address: str, signature: str) -> tuple[bool, str]:
@@ -1791,26 +1847,45 @@ async def cmd_check(m: types.Message) -> None:
     if risks:
         icon, status = "🚨", f"Риски: {', '.join(risks)}"
         prompt = (
-            f"Объясни на русском языке риски {risks} "
-            f"для контракта {addr}. Кратко, без HTML."
+            f"Объясни на русском языке риски {risks} для контракта {addr}. "
+            f"Ответь в формате JSON: {{\"verdict\": \"DANGER\", \"confidence\": 0.9, \"risk_factors\": {risks}, \"explanation\": \"...\"}}. "
+            f"Только JSON, без дополнительного текста."
         )
     else:
         icon, status = "✅", "Явных угроз не обнаружено"
         prompt = (
             f"Кратко на русском: что известно о контракте {addr} на opBNB? "
-            f"Без HTML-тегов."
+            f"Ответь в формате JSON: {{\"verdict\": \"SAFE\", \"confidence\": 0.7, \"risk_factors\": [], \"explanation\": \"...\"}}. "
+            f"Только JSON, без дополнительного текста."
         )
 
     async with ai_sem:
         verdict = await call_ai(prompt)
 
+    # Извлекаем поля из структурированного ответа
+    verdict_text = verdict.get("verdict", "WARNING")
+    confidence = verdict.get("confidence", 0.5)
+    risk_factors = verdict.get("risk_factors", [])
+    explanation = verdict.get("explanation", "Нет пояснения.")
+
+    # Определяем иконку на основе вердикта
+    if verdict_text == "SAFE":
+        icon = "✅"
+    elif verdict_text == "DANGER":
+        icon = "🚨"
+    else:
+        icon = "⚠️"
+
     result_text = (
         f"{icon} <b>Проверка контракта</b>\n"
         f"<code>{esc(addr)}</code>\n\n"
         f"🛡️ <b>VibeScore: {score}/100</b> ({'Безопасно' if is_safe else 'Риск'})\n"
-        f"<b>Статус:</b> {esc(status)}\n\n"
-        f"🧠 <b>AI:</b> {verdict}"
+        f"<b>Статус:</b> {esc(status)}\n"
+        f"<b>Вердикт AI:</b> {verdict_text} (уверенность: {confidence:.0%})\n"
     )
+    if risk_factors:
+        result_text += f"<b>Факторы риска:</b> {', '.join(risk_factors)}\n"
+    result_text += f"\n🧠 <b>Пояснение:</b>\n{esc(explanation)}"
     try:
         await bot.edit_message_text(result_text, m.chat.id, wait.message_id)
     except Exception:
@@ -1866,18 +1941,21 @@ async def perform_audit(addr: str, chat_id: int, reply_to_message_id: int = None
     # 2. Формируем промпт
     prompt = f"""
     Ты - эксперт по безопасности Solidity. Проанализируй этот код контракта на наличие бэкдоров:
-    {code[:15000]}  # ограничение длины
-    
+    {code[:15000]}
+
     Найди: 
     1. Функции Mint (печать новых токенов).
     2. Функции Pause (остановка торгов).
     3. Скрытую смену владельца.
     4. Логику Honeypot.
-    
-    Ответь кратко на русском:
-    - Вердикт (Безопасно/Опасно/Внимание).
-    - Список критических уязвимостей (если есть).
-    - Можно ли это покупать?
+
+    Ответь в формате JSON со следующими полями:
+    - verdict: одно из ["SAFE", "WARNING", "DANGER"] (SAFE = безопасно, WARNING = есть сомнения, DANGER = опасно)
+    - confidence: число от 0 до 1, где 1 = полная уверенность
+    - risk_factors: массив строк, описывающих найденные угрозы (например, ["mint function", "pause", "hidden owner"]). Если угроз нет, массив пустой.
+    - explanation: краткое пояснение для пользователя на русском (2-3 предложения)
+
+    Только JSON, без дополнительного текста.
     """
     
     # 3. Зовём AI
@@ -1887,17 +1965,38 @@ async def perform_audit(addr: str, chat_id: int, reply_to_message_id: int = None
     # 4. Сохраняем в кеш
     async with db_lock:
         db.setdefault("audit_cache", {})[addr.lower()] = {
-            "result": verdict,
+            "result": verdict,  # теперь verdict — это словарь
             "timestamp": time.time()
         }
     await save_db()
     
-    # 5. Финальный отчёт
+    # 5. Формируем финальный отчёт из структурированного ответа
+    verdict_text = verdict.get("verdict", "WARNING")
+    confidence = verdict.get("confidence", 0.5)
+    risk_factors = verdict.get("risk_factors", [])
+    explanation = verdict.get("explanation", "Нет пояснения.")
+
+    # Конвертируем вердикт в эмодзи и текст
+    if verdict_text == "SAFE":
+        verdict_emoji = "✅"
+        verdict_label = "Безопасно"
+    elif verdict_text == "DANGER":
+        verdict_emoji = "🚨"
+        verdict_label = "Опасно"
+    else:
+        verdict_emoji = "⚠️"
+        verdict_label = "Внимание"
+
+    # Формируем текст для пользователя
     report = (
         f"🔍 <b>Результат ИИ-Аудита</b>\n"
         f"<code>{esc(addr)}</code>\n\n"
-        f"{verdict}"
+        f"{verdict_emoji} <b>Вердикт:</b> {verdict_label} (уверенность: {confidence:.0%})\n"
     )
+    if risk_factors:
+        report += f"⚠️ <b>Факторы риска:</b> {', '.join(risk_factors)}\n"
+    report += f"\n🧠 <b>Пояснение:</b>\n{esc(explanation)}"
+    
     await bot.edit_message_text(report, chat_id, status_msg.message_id)
 
 
