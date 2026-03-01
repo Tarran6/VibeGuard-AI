@@ -71,17 +71,12 @@ async def propose_safe_transaction(to_address: str, data: bytes, value: int = 0)
         safe_nonce=None,
         chain_id=204
     )
-    # Оценка газа и подпись нашим ключом
-    try:
-        safe_tx = await safe_tx.estimate_gas()
-    except Exception as e:
-        logger.warning(f"Gas estimation failed: {e}, using defaults")
-        # Если оценка не удалась, оставляем нули, газ подставится позже
-        pass
+    # Оценка газа не требуется, SafeTx сам рассчитает при отправке
     signed_tx = safe_tx.sign(os.getenv("OWNER_PRIVATE_KEY"))
     
     # Отправляем предложение через Transaction Service API
-    tx_service_api = TransactionServiceApi(base_url="https://safe-transaction-opbnb.safe.global")
+    # Пробуем network='opbnb' (если не сработает, замените на 'bsc')
+    tx_service_api = TransactionServiceApi(network='opbnb')
     await tx_service_api.post_transaction(safe.address, signed_tx)
     return signed_tx.safe_tx_hash.hex()
 
