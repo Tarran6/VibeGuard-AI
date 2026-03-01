@@ -4,7 +4,6 @@ import json
 import asyncio
 import logging
 from web3 import Web3
-from web3.middleware import construct_poa_middleware
 from dotenv import load_dotenv
 from safe_eth.eth import EthereumClient
 from safe_eth.safe import Safe
@@ -84,7 +83,6 @@ def get_smart_w3(url_string):
 
 # Подключение к opBNB с умным переключением
 w3 = get_smart_w3(os.getenv("OPBNB_HTTP_URL"))
-w3.middleware_onion.inject(construct_poa_middleware, layer=0)
 
 # Переменные окружения
 NFA_ADDRESS = os.getenv("NFA_CONTRACT_ADDRESS")
