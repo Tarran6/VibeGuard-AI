@@ -93,7 +93,7 @@ async def propose_safe_transaction(to_address: str, data: bytes, value: int = 0)
 
     # Отправляем предложение через Safe Transaction Service для opBNB
     tx_service_api = TransactionServiceApi(network='ethereum', base_url="https://safe-transaction-opbnb.safe.global")
-    await tx_service_api.post_transaction(safe_tx)
+    tx_service_api.post_transaction(safe_tx)
 
     return safe_tx.safe_tx_hash.hex()
 
