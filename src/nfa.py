@@ -15,22 +15,39 @@ load_dotenv()
 logger = logging.getLogger("vibeguard.nfa")
 
 # ---------------------------------------------------------------------------
-# SAFE МУЛЬТИПОДПИСЬ
+# УМНОЕ ПОДКЛЮЧЕНИЕ К БЛОКЧЕЙНУ (переиспользуем из bot.py)
 # ---------------------------------------------------------------------------
+def get_smart_w3(url_string):
+    """Умное подключение к блокчейну с автоматическим переключением"""
+    urls = [u.strip() for u in url_string.split(",") if u.strip()]
+    for url in urls:
+        try:
+            if url.startswith('http'):
+                provider = Web3.HTTPProvider(url, request_kwargs={'timeout': 3})
+            elif url.startswith('ws'):
+                provider = Web3.WebsocketProvider(url)
+            else:
+                continue
+            temp_w3 = Web3(provider)
+            if temp_w3.is_connected():
+                logger.info(f"✅ Успешное подключение к блокчейну через: {url}")
+                return temp_w3
+        except Exception as e:
+            logger.warning(f"⚠️ Узел {url} недоступен: {e}")
+            continue
+    raise Exception("❌ КРИТИЧЕСКАЯ ОШИБКА: Ни один из RPC-узлов не отвечает!")
 
+# ---------------------------------------------------------------------------
+# SAFE МУЛЬТИПОДПИСЬ (ленивая инициализация)
+# ---------------------------------------------------------------------------
 ethereum_client = None
 safe = None
 
 def get_safe():
     global ethereum_client, safe
     if safe is None:
-        # Получаем список URL из переменной окружения
+        # Получаем рабочий RPC URL из списка
         rpc_urls = os.getenv("OPBNB_HTTP_URL", "")
-        # Используем умное подключение, чтобы получить работающий Web3
-        w3_temp = get_smart_w3(rpc_urls)
-        # Теперь нам нужен сам URL, который сработал. Его можно получить из provider'а, но проще:
-        # get_smart_w3 уже выбрала рабочий URL, но мы его не сохраняем.
-        # Вместо этого переберём URL вручную и возьмём первый успешный.
         urls = [u.strip() for u in rpc_urls.split(",") if u.strip()]
         working_url = None
         for url in urls:
@@ -61,57 +78,30 @@ async def propose_safe_transaction(to_address: str, data: bytes, value: int = 0)
         to_address,
         value,
         data,
-        operation=0,
+        operation=0,           # 0 = CALL
         safe_tx_gas=0,
         base_gas=0,
         gas_price=0,
         gas_token=None,
         refund_receiver=None,
         signatures=None,
-        safe_nonce=None,
-        chain_id=204
+        safe_nonce=None,        # будет автоматически получено из контракта
+        chain_id=204            # opBNB
     )
-    # Оценка газа не требуется, SafeTx сам рассчитает при отправке
-    signed_tx = safe_tx.sign(os.getenv("OWNER_PRIVATE_KEY"))
-    
-    # Отправляем предложение через Transaction Service API
-    # Используем network='ethereum' с явным указанием base_url для opBNB
+    # Подписываем нашим ключом (первый владелец)
+    safe_tx.sign(os.getenv("OWNER_PRIVATE_KEY"))
+
+    # Отправляем предложение через Safe Transaction Service для opBNB
     tx_service_api = TransactionServiceApi(network='ethereum', base_url="https://safe-transaction-opbnb.safe.global")
-    await tx_service_api.post_transaction(signed_tx)
-    return signed_tx.safe_tx_hash.hex()
+    await tx_service_api.post_transaction(safe_tx)
 
+    return safe_tx.safe_tx_hash.hex()
 
 # ---------------------------------------------------------------------------
-# УМНОЕ ПОДКЛЮЧЕНИЕ К БЛОКЧЕЙНУ
+# ОСТАЛЬНАЯ ЧАСТЬ ФАЙЛА (без изменений, кроме импорта get_smart_w3 выше)
 # ---------------------------------------------------------------------------
-
-def get_smart_w3(url_string):
-    """Умное подключение к блокчейну с автоматическим переключением"""
-    urls = [u.strip() for u in url_string.split(",") if u.strip()]
-    # Пробуем подключиться по очереди, пока не найдем живой узел
-    for url in urls:
-        try:
-            if url.startswith('http'):
-                provider = Web3.HTTPProvider(url, request_kwargs={'timeout': 3})
-            elif url.startswith('ws'):
-                provider = Web3.WebsocketProvider(url)
-            else:
-                continue
-                
-            temp_w3 = Web3(provider)
-            if temp_w3.is_connected():
-                logger.info(f"✅ Успешное подключение к блокчейну через: {url}")
-                return temp_w3
-        except Exception as e:
-            logger.warning(f"⚠️ Узел {url} недоступен, пробую следующий... Ошибка: {e}")
-            continue
-    raise Exception("❌ КРИТИЧЕСКАЯ ОШИБКА: Ни один из RPC-узлов не отвечает!")
-
-
-# Подключение к opBNB с умным переключением
 w3 = get_smart_w3(os.getenv("OPBNB_HTTP_URL"))
 
-# Переменные окружения
 NFA_ADDRESS = os.getenv("NFA_CONTRACT_ADDRESS")
 OWNER_ADDRESS = os.getenv("OWNER_ADDRESS")
 PRIVATE_KEY = os.getenv("OWNER_PRIVATE_KEY")
@@ -120,7 +110,6 @@ if not all([NFA_ADDRESS, OWNER_ADDRESS, PRIVATE_KEY]):
     logger.error("Missing required env vars: NFA_CONTRACT_ADDRESS, OWNER_ADDRESS, OWNER_PRIVATE_KEY")
     raise EnvironmentError("NFA environment variables not set")
 
-# Загрузка ABI
 abi_path = "contracts/VibeGuardGuardian.abi"
 if not os.path.exists(abi_path):
     logger.error(f"ABI file not found: {abi_path}")
@@ -132,7 +121,7 @@ try:
     logger.info(f"✅ ABI loaded successfully from {abi_path}")
 except UnicodeDecodeError as e:
     logger.error(f"ABI file encoding error: {e}")
-    # Создаем минимальный ABI для базовой работы
+    # fallback minimal ABI
     ABI = [
         {
             "anonymous": False,
@@ -162,9 +151,8 @@ except json.JSONDecodeError as e:
 
 contract = w3.eth.contract(address=Web3.to_checksum_address(NFA_ADDRESS), abi=ABI)
 
-# ---------- Синхронные ядра (выполняются в потоках) ----------
 def _sync_mint_guardian(name: str, image_uri: str):
-    """Синхронная функция минта Guardian NFT"""
+    """Синхронная функция минта Guardian NFT (без мультиподписи)"""
     logger.info(f"⚙️ _sync_mint_guardian вызван с name={name}")
     try:
         nonce = w3.eth.get_transaction_count(OWNER_ADDRESS)
@@ -176,8 +164,6 @@ def _sync_mint_guardian(name: str, image_uri: str):
             'gasPrice': gas_price
         })
         signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-        
-        # Универсальное получение raw transaction
         raw_tx = (
             getattr(signed_tx, 'raw_transaction', None) or 
             getattr(signed_tx, 'rawTransaction', None) or 
@@ -185,23 +171,19 @@ def _sync_mint_guardian(name: str, image_uri: str):
         )
         if raw_tx is None:
             raise AttributeError("Cannot find raw transaction attribute in signed object")
-        
         tx_hash = w3.eth.send_raw_transaction(raw_tx)
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
 
-        # 🔍 Логируем все логи для отладки
         for i, log in enumerate(receipt.logs):
             topics_hex = [t.hex() for t in log['topics']] if log['topics'] else []
             logger.info(f"📄 Log {i}: address={log['address']}, topics={topics_hex}")
 
-        # Вычисляем topic события GuardianMinted (предполагаемая сигнатура)
         guardian_minted_topic = Web3.keccak(text="GuardianMinted(address,uint256,string)").hex()
         logger.info(f"🔍 Ожидаемый topic: {guardian_minted_topic}")
 
         token_id = None
         for log in receipt.logs:
             if log['topics'] and log['topics'][0].hex() == guardian_minted_topic:
-                # Событие найдено, извлекаем tokenId. Обычно он во втором индексированном параметре (topics[2])
                 if len(log['topics']) >= 3:
                     token_id = int(log['topics'][2].hex(), 16)
                 elif len(log['topics']) >= 2:
@@ -211,9 +193,7 @@ def _sync_mint_guardian(name: str, image_uri: str):
                 break
 
         if token_id is None:
-            # Fallback: пробуем взять из первого лога (на случай другой сигнатуры)
             if receipt.logs:
-                # Попробуем topics[2] первого лога
                 if len(receipt.logs[0]['topics']) >= 3:
                     token_id = int(receipt.logs[0]['topics'][2].hex(), 16)
                     logger.warning(f"GuardianMinted event not found, using fallback token_id={token_id}")
@@ -230,15 +210,8 @@ def _sync_mint_guardian(name: str, image_uri: str):
         logger.error(f"mint_guardian failed: {e}", exc_info=True)
         raise
 
-
-# ---------- Асинхронные функции ----------
-async def mint_guardian(name: str, image_uri: str):
-    """Минтит NFT пользователю (асинхронно, но запускается в executor)"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _sync_mint_guardian, name, image_uri)
-
-async def update_guardian_learning(token_id: int, new_merkle_root: bytes, protected_usd: int):
-    """Асинхронно отправляет предложение updateLearning в Safe"""
+def _sync_update_learning(token_id: int, new_merkle_root: bytes, protected_usd: int):
+    """Синхронная обёртка для отправки предложения updateLearning через мультиподпись"""
     try:
         tx_data = contract.functions.updateLearning(token_id, new_merkle_root, protected_usd).build_transaction({
             'from': OWNER_ADDRESS,
@@ -246,19 +219,20 @@ async def update_guardian_learning(token_id: int, new_merkle_root: bytes, protec
             'gas': 150000,
             'gasPrice': 0
         })
-        tx_hash = await propose_safe_transaction(
+        loop = asyncio.get_event_loop()
+        tx_hash = loop.run_until_complete(propose_safe_transaction(
             to_address=NFA_ADDRESS,
             data=tx_data['data'],
             value=0
-        )
+        ))
         logger.info(f"✅ Предложение updateLearning отправлено, tx_hash={tx_hash}")
         return None
     except Exception as e:
         logger.error(f"update_learning failed: {e}", exc_info=True)
         raise
 
-async def attest_protection(token_id: int, wallet: str, risk_score: int):
-    """Асинхронно отправляет предложение attestProtection в Safe"""
+def _sync_attest_protection(token_id: int, wallet: str, risk_score: int):
+    """Синхронная обёртка для отправки предложения attestProtection через мультиподпись"""
     try:
         tx_data = contract.functions.attestProtection(token_id, wallet, risk_score).build_transaction({
             'from': OWNER_ADDRESS,
@@ -266,13 +240,26 @@ async def attest_protection(token_id: int, wallet: str, risk_score: int):
             'gas': 100000,
             'gasPrice': 0
         })
-        tx_hash = await propose_safe_transaction(
+        loop = asyncio.get_event_loop()
+        tx_hash = loop.run_until_complete(propose_safe_transaction(
             to_address=NFA_ADDRESS,
             data=tx_data['data'],
             value=0
-        )
+        ))
         logger.info(f"✅ Предложение attestProtection отправлено, tx_hash={tx_hash}")
         return None
     except Exception as e:
         logger.error(f"attest_protection failed: {e}", exc_info=True)
         raise
+
+async def mint_guardian(name: str, image_uri: str):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _sync_mint_guardian, name, image_uri)
+
+async def update_guardian_learning(token_id: int, new_merkle_root: bytes, protected_usd: int):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _sync_update_learning, token_id, new_merkle_root, protected_usd)
+
+async def attest_protection(token_id: int, wallet: str, risk_score: int):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _sync_attest_protection, token_id, wallet, risk_score)
