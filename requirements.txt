@@ -2,9 +2,9 @@ pyTelegramBotAPI==4.21.0
 aiohttp==3.9.5
 asyncpg==0.29.0
 python-dotenv==1.0.1
-web3==6.18.0
+web3==7.8.0
 eth_account>=0.10.0
-safe-eth-py==5.8.0
+safe-eth-py>=6.0.0
 
 # Тестирование
 pytest==7.4.3
