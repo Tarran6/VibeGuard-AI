@@ -2172,6 +2172,33 @@ async def cmd_set_limit_test(m: types.Message):
         await send_and_clean(m.chat.id, f"Ошибка: {e}", user_id=m.from_user.id)
 
 
+@bot.message_handler(commands=["test_multisig"])
+async def cmd_test_multisig(m: types.Message):
+    if not is_owner(m.from_user.id):
+        await send_and_clean(m.chat.id, "⛔ Только для владельца.", user_id=m.from_user.id)
+        return
+    # Получаем первый token_id из базы
+    async with db_lock:
+        guardians = db.get("user_guardians", {})
+        if not guardians:
+            await send_and_clean(m.chat.id, "❌ Нет ни одного Guardian NFT.", user_id=m.from_user.id)
+            return
+        # Берём первый попавшийся token_id
+        token_id = list(guardians.values())[0]
+    # Вызываем attest_protection с тестовыми данными (нулевой адрес, риск 50)
+    try:
+        await attest_protection(token_id, "0x0000000000000000000000000000000000000000", 50)
+        await send_and_clean(
+            m.chat.id,
+            f"✅ Предложение attestProtection отправлено для token_id {token_id}.\n"
+            f"Проверьте Safe: https://safe.bnbchain.org/{os.getenv('SAFE_ADDRESS')}/transactions",
+            user_id=m.from_user.id
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при тесте мультиподписи: {e}")
+        await send_and_clean(m.chat.id, f"❌ Ошибка: {e}", user_id=m.from_user.id)
+
+
 @bot.message_handler(commands=["watch"])
 async def cmd_watch(m: types.Message) -> None:
     if not is_owner(m.from_user.id): return
