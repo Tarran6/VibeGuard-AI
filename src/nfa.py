@@ -6,10 +6,53 @@ import logging
 from web3 import Web3
 from web3.middleware import geth_poa_middleware
 from dotenv import load_dotenv
+from safe_eth.eth import EthereumClient
+from safe_eth.safe import Safe
+from safe_eth.safe.tx import SafeTx
+from safe_eth.safe.api.transaction_service_api import TransactionServiceApi
 
 load_dotenv()
 
 logger = logging.getLogger("vibeguard.nfa")
+
+# ---------------------------------------------------------------------------
+# SAFE МУЛЬТИПОДПИСЬ
+# ---------------------------------------------------------------------------
+
+# Инициализация клиента Ethereum (используем ту же RPC, что и везде)
+ethereum_client = EthereumClient(os.getenv("OPBNB_HTTP_URL"))
+safe_address = os.getenv("SAFE_ADDRESS")
+safe = Safe(safe_address, ethereum_client)
+
+async def propose_safe_transaction(to_address: str, data: bytes, value: int = 0) -> str:
+    """
+    Создаёт и отправляет предложение транзакции в Safe.
+    Возвращает tx_hash предложения.
+    """
+    safe_tx = SafeTx(
+        ethereum_client,
+        safe_address,
+        to_address,
+        value,
+        data,
+        operation=0,
+        safe_tx_gas=0,
+        base_gas=0,
+        gas_price=0,
+        gas_token=None,
+        refund_receiver=None,
+        signatures=None,
+        safe_nonce=None,
+        chain_id=204
+    )
+    # Оценка газа и подпись нашим ключом
+    safe_tx = await safe_tx.estimate_gas()
+    signed_tx = safe_tx.sign(os.getenv("OWNER_PRIVATE_KEY"))
+    
+    # Отправляем предложение через Transaction Service API
+    tx_service_api = TransactionServiceApi(chain_id=204, base_url="https://safe-transaction-opbnb.safe.global")
+    await tx_service_api.post_transaction(safe_address, signed_tx)
+    return signed_tx.safe_tx_hash.hex()
 
 
 # ---------------------------------------------------------------------------
@@ -164,54 +207,43 @@ def _sync_mint_guardian(name: str, image_uri: str):
 
 def _sync_update_learning(token_id: int, new_merkle_root: bytes, protected_usd: int):
     try:
-        nonce = w3.eth.get_transaction_count(OWNER_ADDRESS)
-        gas_price = w3.eth.gas_price
-        tx = contract.functions.updateLearning(token_id, new_merkle_root, protected_usd).build_transaction({
-            'from': OWNER_ADDRESS,
-            'nonce': nonce,
+        # Строим транзакцию (только данные, без подписи)
+        tx_data = contract.functions.updateLearning(token_id, new_merkle_root, protected_usd).build_transaction({
+            'from': os.getenv("OWNER_ADDRESS"),
+            'nonce': 0,  # nonce для Safe не используется
             'gas': 150000,
-            'gasPrice': gas_price
+            'gasPrice': 0
         })
-        signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-        # Универсальное получение raw transaction
-        raw_tx = (
-            getattr(signed_tx, 'raw_transaction', None) or 
-            getattr(signed_tx, 'rawTransaction', None) or 
-            getattr(signed_tx, 'transaction', None)
-        )
-        if raw_tx is None:
-            raise AttributeError("Cannot find raw transaction attribute in signed object")
-        tx_hash = w3.eth.send_raw_transaction(raw_tx)
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-        logger.info(f"✅ updateLearning succeeded for token {token_id}")
-        return receipt
+        # Отправляем предложение
+        loop = asyncio.get_event_loop()
+        tx_hash = loop.run_until_complete(propose_safe_transaction(
+            to_address=NFA_ADDRESS,
+            data=tx_data['data'],
+            value=0
+        ))
+        logger.info(f"✅ Предложение updateLearning отправлено, tx_hash={tx_hash}")
+        # Возвращаем фиктивный receipt (можно вернуть None, если не нужен)
+        return None
     except Exception as e:
         logger.error(f"update_learning failed: {e}", exc_info=True)
         raise
 
 def _sync_attest_protection(token_id: int, wallet: str, risk_score: int):
     try:
-        nonce = w3.eth.get_transaction_count(OWNER_ADDRESS)
-        gas_price = w3.eth.gas_price
-        tx = contract.functions.attestProtection(token_id, wallet, risk_score).build_transaction({
-            'from': OWNER_ADDRESS,
-            'nonce': nonce,
+        tx_data = contract.functions.attestProtection(token_id, wallet, risk_score).build_transaction({
+            'from': os.getenv("OWNER_ADDRESS"),
+            'nonce': 0,
             'gas': 100000,
-            'gasPrice': gas_price
+            'gasPrice': 0
         })
-        signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-        # Универсальное получение raw transaction
-        raw_tx = (
-            getattr(signed_tx, 'raw_transaction', None) or 
-            getattr(signed_tx, 'rawTransaction', None) or 
-            getattr(signed_tx, 'transaction', None)
-        )
-        if raw_tx is None:
-            raise AttributeError("Cannot find raw transaction attribute in signed object")
-        tx_hash = w3.eth.send_raw_transaction(raw_tx)
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-        logger.info(f"✅ attestProtection succeeded for token {token_id}")
-        return receipt
+        loop = asyncio.get_event_loop()
+        tx_hash = loop.run_until_complete(propose_safe_transaction(
+            to_address=NFA_ADDRESS,
+            data=tx_data['data'],
+            value=0
+        ))
+        logger.info(f"✅ Предложение attestProtection отправлено, tx_hash={tx_hash}")
+        return None
     except Exception as e:
         logger.error(f"attest_protection failed: {e}", exc_info=True)
         raise
