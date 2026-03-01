@@ -4,7 +4,7 @@ asyncpg==0.29.0
 python-dotenv==1.0.1
 web3==6.18.0
 eth_account>=0.10.0
-safe-eth-py==7.19.0
+safe-eth-py==5.8.0
 
 # Тестирование
 pytest==7.4.3
