@@ -78,15 +78,15 @@ async def propose_safe_transaction(to_address: str, data: bytes, value: int = 0)
         to_address,
         value,
         data,
-        operation=0,           # 0 = CALL
+        operation=0,
         safe_tx_gas=0,
         base_gas=0,
         gas_price=0,
         gas_token=None,
         refund_receiver=None,
         signatures=None,
-        safe_nonce=None,        # будет автоматически получено из контракта
-        chain_id=204            # opBNB
+        safe_nonce=None,
+        chain_id=204
     )
     # Подписываем нашим ключом (первый владелец)
     safe_tx.sign(os.getenv("OWNER_PRIVATE_KEY"))
@@ -98,7 +98,7 @@ async def propose_safe_transaction(to_address: str, data: bytes, value: int = 0)
     return safe_tx.safe_tx_hash.hex()
 
 # ---------------------------------------------------------------------------
-# ОСТАЛЬНАЯ ЧАСТЬ ФАЙЛА (без изменений, кроме импорта get_smart_w3 выше)
+# ИНИЦИАЛИЗАЦИЯ WEB3 И КОНТРАКТА (как и раньше)
 # ---------------------------------------------------------------------------
 w3 = get_smart_w3(os.getenv("OPBNB_HTTP_URL"))
 
@@ -151,8 +151,9 @@ except json.JSONDecodeError as e:
 
 contract = w3.eth.contract(address=Web3.to_checksum_address(NFA_ADDRESS), abi=ABI)
 
+# ---------- СИНХРОННАЯ ФУНКЦИЯ МИНТА (без мультиподписи) ----------
 def _sync_mint_guardian(name: str, image_uri: str):
-    """Синхронная функция минта Guardian NFT (без мультиподписи)"""
+    """Синхронная функция минта Guardian NFT (выполняется в executor)"""
     logger.info(f"⚙️ _sync_mint_guardian вызван с name={name}")
     try:
         nonce = w3.eth.get_transaction_count(OWNER_ADDRESS)
@@ -210,8 +211,9 @@ def _sync_mint_guardian(name: str, image_uri: str):
         logger.error(f"mint_guardian failed: {e}", exc_info=True)
         raise
 
-def _sync_update_learning(token_id: int, new_merkle_root: bytes, protected_usd: int):
-    """Синхронная обёртка для отправки предложения updateLearning через мультиподпись"""
+# ---------- АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ МУЛЬТИПОДПИСИ ----------
+async def update_guardian_learning(token_id: int, new_merkle_root: bytes, protected_usd: int):
+    """Асинхронно отправляет предложение updateLearning через Safe"""
     try:
         tx_data = contract.functions.updateLearning(token_id, new_merkle_root, protected_usd).build_transaction({
             'from': OWNER_ADDRESS,
@@ -219,20 +221,19 @@ def _sync_update_learning(token_id: int, new_merkle_root: bytes, protected_usd: 
             'gas': 150000,
             'gasPrice': 0
         })
-        loop = asyncio.get_event_loop()
-        tx_hash = loop.run_until_complete(propose_safe_transaction(
+        tx_hash = await propose_safe_transaction(
             to_address=NFA_ADDRESS,
             data=tx_data['data'],
             value=0
-        ))
+        )
         logger.info(f"✅ Предложение updateLearning отправлено, tx_hash={tx_hash}")
         return None
     except Exception as e:
-        logger.error(f"update_learning failed: {e}", exc_info=True)
+        logger.error(f"update_guardian_learning failed: {e}", exc_info=True)
         raise
 
-def _sync_attest_protection(token_id: int, wallet: str, risk_score: int):
-    """Синхронная обёртка для отправки предложения attestProtection через мультиподпись"""
+async def attest_protection(token_id: int, wallet: str, risk_score: int):
+    """Асинхронно отправляет предложение attestProtection через Safe"""
     try:
         tx_data = contract.functions.attestProtection(token_id, wallet, risk_score).build_transaction({
             'from': OWNER_ADDRESS,
@@ -240,26 +241,18 @@ def _sync_attest_protection(token_id: int, wallet: str, risk_score: int):
             'gas': 100000,
             'gasPrice': 0
         })
-        loop = asyncio.get_event_loop()
-        tx_hash = loop.run_until_complete(propose_safe_transaction(
+        tx_hash = await propose_safe_transaction(
             to_address=NFA_ADDRESS,
             data=tx_data['data'],
             value=0
-        ))
+        )
         logger.info(f"✅ Предложение attestProtection отправлено, tx_hash={tx_hash}")
         return None
     except Exception as e:
         logger.error(f"attest_protection failed: {e}", exc_info=True)
         raise
 
+# ---------- АСИНХРОННАЯ ОБЁРТКА ДЛЯ МИНТА (остаётся через executor) ----------
 async def mint_guardian(name: str, image_uri: str):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _sync_mint_guardian, name, image_uri)
-
-async def update_guardian_learning(token_id: int, new_merkle_root: bytes, protected_usd: int):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _sync_update_learning, token_id, new_merkle_root, protected_usd)
-
-async def attest_protection(token_id: int, wallet: str, risk_score: int):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _sync_attest_protection, token_id, wallet, risk_score)
