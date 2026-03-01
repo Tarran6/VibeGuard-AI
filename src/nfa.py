@@ -18,14 +18,33 @@ logger = logging.getLogger("vibeguard.nfa")
 # SAFE МУЛЬТИПОДПИСЬ
 # ---------------------------------------------------------------------------
 
-# Ленивая инициализация Safe
 ethereum_client = None
 safe = None
 
 def get_safe():
     global ethereum_client, safe
     if safe is None:
-        ethereum_client = EthereumClient(os.getenv("OPBNB_HTTP_URL"))
+        # Получаем список URL из переменной окружения
+        rpc_urls = os.getenv("OPBNB_HTTP_URL", "")
+        # Используем умное подключение, чтобы получить работающий Web3
+        w3_temp = get_smart_w3(rpc_urls)
+        # Теперь нам нужен сам URL, который сработал. Его можно получить из provider'а, но проще:
+        # get_smart_w3 уже выбрала рабочий URL, но мы его не сохраняем.
+        # Вместо этого переберём URL вручную и возьмём первый успешный.
+        urls = [u.strip() for u in rpc_urls.split(",") if u.strip()]
+        working_url = None
+        for url in urls:
+            try:
+                provider = Web3.HTTPProvider(url, request_kwargs={'timeout': 3})
+                w3 = Web3(provider)
+                if w3.is_connected():
+                    working_url = url
+                    break
+            except Exception:
+                continue
+        if not working_url:
+            raise Exception("Не удалось подключиться ни к одному RPC-узлу")
+        ethereum_client = EthereumClient(working_url)
         safe_address = os.getenv("SAFE_ADDRESS")
         safe = Safe(safe_address, ethereum_client)
     return safe
@@ -52,12 +71,13 @@ async def propose_safe_transaction(to_address: str, data: bytes, value: int = 0)
         safe_nonce=None,
         chain_id=204
     )
-    # Оценка газа - пробуем синхронную версию
+    # Оценка газа и подпись нашим ключом
     try:
-        safe_tx = safe_tx.estimate_gas()
+        safe_tx = await safe_tx.estimate_gas()
     except Exception as e:
         logger.warning(f"Gas estimation failed: {e}, using defaults")
-    
+        # Если оценка не удалась, оставляем нули, газ подставится позже
+        pass
     signed_tx = safe_tx.sign(os.getenv("OWNER_PRIVATE_KEY"))
     
     # Отправляем предложение через Transaction Service API
