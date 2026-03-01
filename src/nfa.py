@@ -7,7 +7,7 @@ from web3 import Web3
 from dotenv import load_dotenv
 from safe_eth.eth import EthereumClient
 from safe_eth.safe import Safe
-from safe_eth.safe.tx import SafeTx
+from safe_eth.safe.safe_tx import SafeTx
 from safe_eth.safe.api.transaction_service_api import TransactionServiceApi
 
 load_dotenv()
