@@ -61,7 +61,7 @@ async def propose_safe_transaction(to_address: str, data: bytes, value: int = 0)
     signed_tx = safe_tx.sign(os.getenv("OWNER_PRIVATE_KEY"))
     
     # Отправляем предложение через Transaction Service API
-    tx_service_api = TransactionServiceApi(chain_id=204, base_url="https://safe-transaction-opbnb.safe.global")
+    tx_service_api = TransactionServiceApi(base_url="https://safe-transaction-opbnb.safe.global")
     await tx_service_api.post_transaction(safe.address, signed_tx)
     return signed_tx.safe_tx_hash.hex()
 
