@@ -18,19 +18,27 @@ logger = logging.getLogger("vibeguard.nfa")
 # SAFE МУЛЬТИПОДПИСЬ
 # ---------------------------------------------------------------------------
 
-# Инициализация клиента Ethereum (используем ту же RPC, что и везде)
-ethereum_client = EthereumClient(os.getenv("OPBNB_HTTP_URL"))
-safe_address = os.getenv("SAFE_ADDRESS")
-safe = Safe(safe_address, ethereum_client)
+# Ленивая инициализация Safe
+ethereum_client = None
+safe = None
+
+def get_safe():
+    global ethereum_client, safe
+    if safe is None:
+        ethereum_client = EthereumClient(os.getenv("OPBNB_HTTP_URL"))
+        safe_address = os.getenv("SAFE_ADDRESS")
+        safe = Safe(safe_address, ethereum_client)
+    return safe
 
 async def propose_safe_transaction(to_address: str, data: bytes, value: int = 0) -> str:
     """
     Создаёт и отправляет предложение транзакции в Safe.
     Возвращает tx_hash предложения.
     """
+    safe = get_safe()
     safe_tx = SafeTx(
-        ethereum_client,
-        safe_address,
+        safe.ethereum_client,
+        safe.address,
         to_address,
         value,
         data,
@@ -50,7 +58,7 @@ async def propose_safe_transaction(to_address: str, data: bytes, value: int = 0)
     
     # Отправляем предложение через Transaction Service API
     tx_service_api = TransactionServiceApi(chain_id=204, base_url="https://safe-transaction-opbnb.safe.global")
-    await tx_service_api.post_transaction(safe_address, signed_tx)
+    await tx_service_api.post_transaction(safe.address, signed_tx)
     return signed_tx.safe_tx_hash.hex()
 
 
